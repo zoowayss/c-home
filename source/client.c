@@ -381,7 +381,76 @@ void process_server_update(const char *update) {
             // 打印编辑结果
             printf("%s\n", line);
 
-            // 如果需要，可以在这里解析和应用编辑命令
+            // 解析和应用编辑命令
+            if (strncmp(line, "EDIT", 4) == 0) {
+                char *cmd_start = strchr(line, ' ');
+                if (cmd_start) {
+                    cmd_start = strchr(cmd_start + 1, ' '); // 跳过用户名
+                    if (cmd_start) {
+                        cmd_start++; // 跳过空格
+
+                        // 解析编辑命令
+                        if (strncmp(cmd_start, "INSERT", 6) == 0) {
+                            // 格式: INSERT <position> <text>
+                            char *pos_str = cmd_start + 7; // 跳过"INSERT "
+                            char *text = strchr(pos_str, ' ');
+                            if (text) {
+                                *text = '\0'; // 分割位置和文本
+                                text++; // 跳过空格
+
+                                // 提取位置
+                                int position = atoi(pos_str);
+
+                                // 应用插入操作
+                                pthread_mutex_lock(&doc_mutex);
+                                markdown_insert(&doc, doc.current_version, position, text);
+                                pthread_mutex_unlock(&doc_mutex);
+                            }
+                        } else if (strncmp(cmd_start, "DELETE", 6) == 0) {
+                            // 格式: DELETE <start> <end>
+                            char *start_str = cmd_start + 7; // 跳过"DELETE "
+                            char *end_str = strchr(start_str, ' ');
+                            if (end_str) {
+                                *end_str = '\0'; // 分割起始和结束位置
+                                end_str++; // 跳过空格
+
+                                // 提取位置
+                                int start = atoi(start_str);
+                                int end = atoi(end_str);
+
+                                // 应用删除操作
+                                pthread_mutex_lock(&doc_mutex);
+                                markdown_delete(&doc, doc.current_version, start, end - start + 1);
+                                pthread_mutex_unlock(&doc_mutex);
+                            }
+                        } else if (strncmp(cmd_start, "REPLACE", 7) == 0) {
+                            // 格式: REPLACE <start> <end> <text>
+                            char *start_str = cmd_start + 8; // 跳过"REPLACE "
+                            char *end_str = strchr(start_str, ' ');
+                            if (end_str) {
+                                *end_str = '\0'; // 分割起始和结束位置
+                                end_str++; // 跳过空格
+
+                                char *text = strchr(end_str, ' ');
+                                if (text) {
+                                    *text = '\0'; // 分割结束位置和文本
+                                    text++; // 跳过空格
+
+                                    // 提取位置
+                                    int start = atoi(start_str);
+                                    int end = atoi(end_str);
+
+                                    // 应用替换操作（先删除再插入）
+                                    pthread_mutex_lock(&doc_mutex);
+                                    markdown_delete(&doc, doc.current_version, start, end - start + 1);
+                                    markdown_insert(&doc, doc.current_version, start, text);
+                                    pthread_mutex_unlock(&doc_mutex);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
