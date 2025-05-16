@@ -279,6 +279,7 @@ int main(int argc, char *argv[]) {
                 printf("\n可用命令:\n");
                 printf("DOC? - 显示当前文档内容\n");
                 printf("PERM? - 显示当前用户权限\n");
+                printf("SAVE - 保存文档到服务器\n");
                 printf("DISCONNECT - 断开连接\n");
                 printf("HELP - 显示帮助信息\n");
             } else {
@@ -289,6 +290,11 @@ int main(int argc, char *argv[]) {
                 // 如果是断开连接命令，退出循环
                 if (strcmp(command, "DISCONNECT") == 0) {
                     client_running = 0;
+                }
+
+                // 如果是保存命令，显示提示信息
+                if (strcmp(command, "SAVE") == 0) {
+                    printf("已发送保存命令到服务器\n");
                 }
             }
         }

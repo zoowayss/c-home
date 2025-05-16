@@ -764,6 +764,10 @@ void process_command(client_info *client, const char *command) {
             dprintf(client->s2c_fd, "\n%s", command_queue[i].command);
         }
         pthread_mutex_unlock(&queue_mutex);
+    } else if (strcmp(token, "SAVE") == 0) {
+        // 保存文档
+        save_document();
+        dprintf(client->s2c_fd, "\n文档已保存到 doc.md");
     } else {
         // 编辑命令
         if (client->role != ROLE_WRITE) {
