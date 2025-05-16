@@ -252,6 +252,8 @@ int main(int argc, char *argv[]) {
     // 主循环，处理用户命令
     char command[MAX_COMMAND_LEN];
     while (client_running) {
+        printf("请输入命令 (输入 HELP 获取帮助)> ");
+        fflush(stdout);  // 确保提示立即显示
         if (fgets(command, MAX_COMMAND_LEN, stdin)) {
             // 移除换行符
             size_t len = strlen(command);
