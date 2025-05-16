@@ -128,7 +128,89 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // 解析角色
+    // 检查响应格式
+    if (strncmp(response, "VERSION", 7) == 0) {
+        // 这是一个版本更新消息，但我们期望的是角色信息
+        // 尝试从下一行读取角色信息
+        bytes_read = read(s2c_fd, response, MAX_COMMAND_LEN - 1);
+        if (bytes_read <= 0) {
+            perror("Error reading role information");
+            cleanup();
+            return 1;
+        }
+
+        response[bytes_read] = '\0';
+        printf("Additional response: '%s'\n", response);
+
+        // 检查是否是角色信息
+        if (strncmp(response, "read", 4) == 0 || strncmp(response, "write", 5) == 0) {
+            // 正确的角色信息
+            char role[10];
+            sscanf(response, "%9s", role);
+            printf("Connected as %s with role: %s\n", username, role);
+
+            // 继续正常处理
+            goto process_document;
+        } else {
+            // 仍然无法获取正确的角色信息
+            printf("Warning: Unable to determine role. Assuming read-only access.\n");
+
+            // 假设用户有读取权限
+            printf("Connected as %s with role: read\n", username);
+
+            // 创建更新线程
+            pthread_create(&update_thread, NULL, update_handler, NULL);
+
+            // 进入主循环
+            char command[MAX_COMMAND_LEN];
+            while (client_running) {
+                printf("请输入命令 (DOC? 查看文档, DISCONNECT 断开连接):\n");
+                if (fgets(command, MAX_COMMAND_LEN, stdin)) {
+                    // 移除换行符
+                    size_t len = strlen(command);
+                    if (len > 0 && command[len - 1] == '\n') {
+                        command[len - 1] = '\0';
+                        len--;
+                    }
+
+                    // 检查命令是否有效
+                    if (len == 0) {
+                        continue;
+                    }
+
+                    // 处理本地命令
+                    if (strcmp(command, "DOC?") == 0) {
+                        // 打印文档内容
+                        pthread_mutex_lock(&doc_mutex);
+                        printf("\n");
+                        markdown_print(&doc, stdout);
+                        pthread_mutex_unlock(&doc_mutex);
+                    } else if (strcmp(command, "DISCONNECT") == 0) {
+                        client_running = 0;
+                    } else if (strcmp(command, "HELP") == 0) {
+                        printf("\n可用命令:\n");
+                        printf("DOC? - 显示当前文档内容\n");
+                        printf("DISCONNECT - 断开连接\n");
+                        printf("HELP - 显示帮助信息\n");
+                    } else {
+                        printf("未知命令。输入 HELP 获取帮助。\n");
+                    }
+                }
+            }
+
+            // 等待更新线程结束
+            pthread_cancel(update_thread);
+            pthread_join(update_thread, NULL);
+
+            // 清理资源
+            cleanup();
+
+            return 0;
+        }
+    }
+
+process_document:
+    // 正常处理 - 解析角色
     char role[10];
     sscanf(response, "%9s", role);
     printf("Connected as %s with role: %s\n", username, role);
