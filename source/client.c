@@ -91,19 +91,35 @@ int main(int argc, char *argv[]) {
     }
 
     // 发送用户名
-    write(c2s_fd, username, strlen(username));
-    write(c2s_fd, "\n", 1);
+    printf("Sending username: '%s'\n", username);
+    ssize_t bytes_written = write(c2s_fd, username, strlen(username));
+    if (bytes_written < 0) {
+        perror("Error writing username");
+        cleanup();
+        return 1;
+    }
+    printf("Wrote %zd bytes of username\n", bytes_written);
+
+    bytes_written = write(c2s_fd, "\n", 1);
+    if (bytes_written < 0) {
+        perror("Error writing newline");
+        cleanup();
+        return 1;
+    }
 
     // 读取服务器响应
+    printf("Waiting for server response...\n");
     char response[MAX_COMMAND_LEN];
     ssize_t bytes_read = read(s2c_fd, response, MAX_COMMAND_LEN - 1);
     if (bytes_read <= 0) {
-        perror("read");
+        perror("Error reading server response");
+        printf("Failed to read server response (bytes_read=%zd)\n", bytes_read);
         cleanup();
         return 1;
     }
 
     response[bytes_read] = '\0';
+    printf("Received response: '%s'\n", response);
 
     // 检查是否被拒绝
     if (strncmp(response, "Reject", 6) == 0) {
@@ -142,16 +158,47 @@ int main(int argc, char *argv[]) {
 
     // 读取文档内容
     if (doc_length > 0) {
-        char *content = (char *)malloc(doc_length + 1);
-        if (!content) {
+        printf("Document length: %zu bytes\n", doc_length);
+
+        // 使用更安全的方式分配内存，限制最大大小
+        size_t safe_length = (doc_length > 1024*1024) ? 1024*1024 : doc_length; // 限制为最大1MB
+        printf("Allocating buffer of %zu bytes for document content\n", safe_length + 1);
+
+        // 尝试分配内存，如果失败则尝试更小的大小
+        char *content = NULL;
+        while (safe_length > 0) {
+            content = (char *)malloc(safe_length + 1);
+            if (content) break;
+
+            // 分配失败，尝试更小的大小
             perror("malloc");
+            safe_length = safe_length / 2;
+            printf("Retrying with smaller buffer: %zu bytes\n", safe_length + 1);
+        }
+
+        if (!content) {
+            fprintf(stderr, "Failed to allocate memory for document content after multiple attempts\n");
             cleanup();
             return 1;
         }
 
+        printf("Successfully allocated %zu bytes for document content\n", safe_length + 1);
+
+        // 分块读取文档内容
         size_t total_read = 0;
+        size_t chunk_size = 4096; // 每次读取4KB
+
         while (total_read < doc_length) {
-            bytes_read = read(s2c_fd, content + total_read, doc_length - total_read);
+            size_t to_read = (doc_length - total_read < chunk_size) ?
+                             (doc_length - total_read) : chunk_size;
+
+            // 确保不会超出分配的缓冲区
+            if (total_read + to_read > safe_length) {
+                to_read = safe_length - total_read;
+                if (to_read == 0) break;
+            }
+
+            bytes_read = read(s2c_fd, content + total_read, to_read);
             if (bytes_read <= 0) {
                 perror("read content");
                 free(content);
@@ -161,7 +208,21 @@ int main(int argc, char *argv[]) {
             total_read += bytes_read;
         }
 
-        content[doc_length] = '\0';
+        // 如果文档太大，跳过剩余部分
+        if (doc_length > safe_length) {
+            char discard_buffer[1024];
+            size_t remaining = doc_length - safe_length;
+            while (remaining > 0) {
+                size_t to_read = (remaining < sizeof(discard_buffer)) ?
+                                 remaining : sizeof(discard_buffer);
+                bytes_read = read(s2c_fd, discard_buffer, to_read);
+                if (bytes_read <= 0) break;
+                remaining -= bytes_read;
+            }
+            printf("Warning: Document too large, truncated to %zu bytes\n", safe_length);
+        }
+
+        content[total_read] = '\0';
 
         // 将内容添加到文档
         pthread_mutex_lock(&doc_mutex);

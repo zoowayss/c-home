@@ -549,16 +549,26 @@ void *update_handler(void *arg) {
 
                 // 添加结果到更新消息
                 size_t result_len = strlen(result_str);
-                if (updates_len + result_len + 1 > updates_capacity) {
-                    updates_capacity = updates_len + result_len + 1024;  // 增加缓冲区大小
-                    char *new_updates = (char *)realloc(updates, updates_capacity);
+
+                // 检查是否超出合理大小限制
+                if (updates_capacity > 1024*1024) { // 如果已经超过1MB
+                    // 跳过此次添加，防止内存过度增长
+                    fprintf(stderr, "Warning: Update message too large, skipping command result\n");
+                } else if (updates_len + result_len + 1 > updates_capacity) {
+                    // 计算新的容量，但设置上限
+                    size_t new_capacity = updates_len + result_len + 1024;  // 增加缓冲区大小
+                    if (new_capacity > 1024*1024) new_capacity = 1024*1024; // 最大1MB
+
+                    char *new_updates = (char *)realloc(updates, new_capacity);
                     if (!new_updates) {
+                        fprintf(stderr, "Failed to allocate memory for updates\n");
                         free(updates);
                         pthread_mutex_unlock(&doc_mutex);
                         pthread_mutex_unlock(&queue_mutex);
                         return NULL;
                     }
                     updates = new_updates;
+                    updates_capacity = new_capacity;
                 }
 
                 strcpy(updates + updates_len, result_str);
@@ -567,15 +577,25 @@ void *update_handler(void *arg) {
 
             // 添加结束标记
             if (updates_len + 5 > updates_capacity) {
-                updates_capacity = updates_len + 5;
-                char *new_updates = (char *)realloc(updates, updates_capacity);
-                if (!new_updates) {
-                    free(updates);
-                    pthread_mutex_unlock(&doc_mutex);
-                    pthread_mutex_unlock(&queue_mutex);
-                    return NULL;
+                // 确保不超过内存限制
+                if (updates_capacity >= 1024*1024) {
+                    // 如果已经达到最大限制，截断更新消息
+                    updates[updates_capacity - 5] = '\0';
+                    updates_len = updates_capacity - 5;
+                    fprintf(stderr, "Warning: Update message truncated due to size limit\n");
+                } else {
+                    size_t new_capacity = updates_len + 5;
+                    char *new_updates = (char *)realloc(updates, new_capacity);
+                    if (!new_updates) {
+                        fprintf(stderr, "Failed to allocate memory for END marker\n");
+                        free(updates);
+                        pthread_mutex_unlock(&doc_mutex);
+                        pthread_mutex_unlock(&queue_mutex);
+                        return NULL;
+                    }
+                    updates = new_updates;
+                    updates_capacity = new_capacity;
                 }
-                updates = new_updates;
             }
 
             strcpy(updates + updates_len, "END\n");
@@ -614,9 +634,27 @@ void *update_handler(void *arg) {
  * 获取客户端角色
  */
 client_role get_client_role(const char *username) {
+    if (!username || strlen(username) == 0) {
+        fprintf(stderr, "Error: Empty username provided to get_client_role\n");
+        return ROLE_NONE;
+    }
+
+    printf("Checking role for user: '%s'\n", username);
+
+    // 尝试打开角色文件
     FILE *roles_file = fopen(ROLES_FILE, "r");
     if (!roles_file) {
-        perror("fopen");
+        perror("Error opening roles file");
+        fprintf(stderr, "Failed to open roles file: %s\n", ROLES_FILE);
+
+        // 尝试获取当前工作目录
+        char cwd[256];
+        if (getcwd(cwd, sizeof(cwd)) != NULL) {
+            fprintf(stderr, "Current working directory: %s\n", cwd);
+        } else {
+            perror("getcwd() error");
+        }
+
         return ROLE_NONE;
     }
 
@@ -625,26 +663,40 @@ client_role get_client_role(const char *username) {
         // 移除行尾的换行符
         line[strcspn(line, "\n")] = 0;
 
+        printf("Processing line: '%s'\n", line);
+
         // 分割用户名和角色
+        char line_copy[256];
+        strncpy(line_copy, line, sizeof(line_copy) - 1);
+        line_copy[sizeof(line_copy) - 1] = '\0';
+
         char *role_str = NULL;
-        char *user = strtok(line, " \t");
+        char *user = strtok(line_copy, " \t");
         if (user) {
             role_str = strtok(NULL, " \t");
         }
+
+        printf("Parsed: user='%s', role='%s'\n",
+               user ? user : "NULL",
+               role_str ? role_str : "NULL");
 
         if (user && role_str && strcmp(user, username) == 0) {
             fclose(roles_file);
 
             if (strcmp(role_str, "write") == 0) {
+                printf("User '%s' has WRITE permission\n", username);
                 return ROLE_WRITE;
             } else if (strcmp(role_str, "read") == 0) {
+                printf("User '%s' has READ permission\n", username);
                 return ROLE_READ;
             } else {
+                printf("User '%s' has UNKNOWN permission: '%s'\n", username, role_str);
                 return ROLE_NONE;
             }
         }
     }
 
+    printf("User '%s' not found in roles file\n", username);
     fclose(roles_file);
     return ROLE_NONE;
 }
