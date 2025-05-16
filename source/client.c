@@ -402,6 +402,12 @@ void process_server_update(const char *update) {
                                 int position = atoi(pos_str);
 
                                 // 应用插入操作
+                                // 移除可能的 SUCCESS 后缀
+                                char *success = strstr(text, " SUCCESS");
+                                if (success) {
+                                    *success = '\0';
+                                }
+
                                 pthread_mutex_lock(&doc_mutex);
                                 markdown_insert(&doc, doc.current_version, position, text);
                                 pthread_mutex_unlock(&doc_mutex);
@@ -416,6 +422,13 @@ void process_server_update(const char *update) {
 
                                 // 提取位置
                                 int start = atoi(start_str);
+
+                                // 移除可能的 SUCCESS 后缀
+                                char *success = strstr(end_str, " SUCCESS");
+                                if (success) {
+                                    *success = '\0';
+                                }
+
                                 int end = atoi(end_str);
 
                                 // 应用删除操作
@@ -439,6 +452,12 @@ void process_server_update(const char *update) {
                                     // 提取位置
                                     int start = atoi(start_str);
                                     int end = atoi(end_str);
+
+                                    // 移除可能的 SUCCESS 后缀
+                                    char *success = strstr(text, " SUCCESS");
+                                    if (success) {
+                                        *success = '\0';
+                                    }
 
                                     // 应用替换操作（先删除再插入）
                                     pthread_mutex_lock(&doc_mutex);
