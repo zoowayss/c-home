@@ -63,12 +63,15 @@ int main(int argc, char *argv[]) {
     sigaction(SIGRTMIN + 1, &sa, NULL);
 
     // 向服务器发送连接请求
+    printf("[日志] 正在向服务器(PID: %d)发送连接请求...\n", server_pid);
     if (kill(server_pid, SIGRTMIN) == -1) {
         perror("kill");
         return 1;
     }
+    printf("[日志] 连接请求已发送\n");
 
     // 等待服务器响应
+    printf("[日志] 等待服务器创建管道并发送信号...\n");
     int sig;
     sigset_t wait_mask;
     sigemptyset(&wait_mask);
@@ -78,40 +81,65 @@ int main(int argc, char *argv[]) {
         perror("sigwait");
         return 1;
     }
+    printf("[日志] 收到服务器信号，管道已创建\n");
 
     // 打开命名管道
     char c2s_path[64], s2c_path[64];
     snprintf(c2s_path, sizeof(c2s_path), "FIFO_C2S_%d", client_pid);
     snprintf(s2c_path, sizeof(s2c_path), "FIFO_S2C_%d", client_pid);
 
-    c2s_fd = open(c2s_path, O_WRONLY);
-    s2c_fd = open(s2c_path, O_RDONLY);
+    printf("[日志] 尝试打开管道文件:\n");
+    printf("[日志] - 客户端到服务器: %s\n", c2s_path);
+    printf("[日志] - 服务器到客户端: %s\n", s2c_path);
 
-    if (c2s_fd == -1 || s2c_fd == -1) {
-        perror("open");
+    c2s_fd = open(c2s_path, O_WRONLY);
+    if (c2s_fd == -1) {
+        printf("[错误] 无法打开客户端到服务器的管道\n");
+        perror("open c2s_fd");
         cleanup_resources();
         return 1;
     }
+    printf("[日志] 成功打开客户端到服务器的管道 (fd=%d)\n", c2s_fd);
+
+    s2c_fd = open(s2c_path, O_RDONLY);
+    if (s2c_fd == -1) {
+        printf("[错误] 无法打开服务器到客户端的管道\n");
+        perror("open s2c_fd");
+        cleanup_resources();
+        return 1;
+    }
+    printf("[日志] 成功打开服务器到客户端的管道 (fd=%d)\n", s2c_fd);
 
     // 发送用户名
-    write(c2s_fd, username, strlen(username));
+    printf("[日志] 发送用户名: %s\n", username);
+    ssize_t bytes_written = write(c2s_fd, username, strlen(username));
+    if (bytes_written < 0) {
+        printf("[错误] 发送用户名失败\n");
+        perror("write username");
+        cleanup_resources();
+        return 1;
+    }
     write(c2s_fd, "\n", 1);
+    printf("[日志] 用户名已发送，等待服务器响应...\n");
 
     // 读取服务器响应（角色和文档内容）
+    printf("[日志] 等待读取服务器响应...\n");
     char response[1024];
     ssize_t bytes_read = read(s2c_fd, response, sizeof(response) - 1);
 
     if (bytes_read <= 0) {
+        printf("[错误] 读取服务器响应失败\n");
         perror("read");
         cleanup_resources();
         return 1;
     }
 
     response[bytes_read] = '\0';
+    printf("[日志] 收到服务器响应: %s\n", response);
 
     // 检查是否被拒绝
     if (strncmp(response, "Reject", 6) == 0) {
-        printf("%s\n", response);
+        printf("[错误] 连接被拒绝: %s\n", response);
         cleanup_resources();
         return 1;
     }
@@ -119,32 +147,41 @@ int main(int argc, char *argv[]) {
     // 解析角色
     if (strncmp(response, "write", 5) == 0) {
         is_write_permission = 1;
+        printf("[日志] 已获得写入权限\n");
         printf("Connected with write permission.\n");
     } else {
+        printf("[日志] 已获得只读权限\n");
         printf("Connected with read-only permission.\n");
     }
+    printf("[日志] 权限验证完成\n");
 
     // 读取文档版本号
+    printf("[日志] 等待接收文档版本号...\n");
     char version_str[32];
     bytes_read = read(s2c_fd, version_str, sizeof(version_str) - 1);
     if (bytes_read <= 0) {
+        printf("[错误] 读取文档版本号失败\n");
         perror("read version");
         cleanup_resources();
         return 1;
     }
     version_str[bytes_read] = '\0';
     document_version = strtoull(version_str, NULL, 10);
+    printf("[日志] 接收到文档版本号: %lu\n", document_version);
 
     // 读取文档长度
+    printf("[日志] 等待接收文档长度...\n");
     char length_str[32];
     bytes_read = read(s2c_fd, length_str, sizeof(length_str) - 1);
     if (bytes_read <= 0) {
+        printf("[错误] 读取文档长度失败\n");
         perror("read length");
         cleanup_resources();
         return 1;
     }
     length_str[bytes_read] = '\0';
     size_t doc_length = strtoull(length_str, NULL, 10);
+    printf("[日志] 接收到文档长度: %zu 字节\n", doc_length);
 
     // 分配内存并读取文档内容
     document = (char *)malloc(doc_length + 1);
