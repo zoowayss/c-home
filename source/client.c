@@ -7,6 +7,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <pthread.h>
+#include <errno.h>
+#include <stdint.h>
 
 #define MAX_COMMAND_LEN 256
 #define MAX_DOCUMENT_SIZE 1048576 // 1MB

@@ -2,11 +2,11 @@
 #define MARKDOWN_H
 #include <stdio.h>
 #include <stdint.h>
-#include "document.h"  
+#include "document.h"
 /**
  * The given file contains all the functions you will be required to complete. You are free to and encouraged to create
  * more helper functions to help assist you when creating the document. For the automated marking you can expect unit tests
- * for the following tests, verifying if the document functionalities are correctly implemented. All the commands are explained 
+ * for the following tests, verifying if the document functionalities are correctly implemented. All the commands are explained
  * in detail in the assignment spec.
  */
 
@@ -28,6 +28,7 @@ int markdown_unordered_list(document *doc, uint64_t version, size_t pos);
 int markdown_code(document *doc, uint64_t version, size_t start, size_t end);
 int markdown_horizontal_rule(document *doc, uint64_t version, size_t pos);
 int markdown_link(document *doc, uint64_t version, size_t start, size_t end, const char *url);
+int markdown_newline(document *doc, uint64_t version, size_t pos);
 
 // === Utilities ===
 void markdown_print(const document *doc, FILE *stream);

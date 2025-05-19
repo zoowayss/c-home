@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <pthread.h>
 #include <time.h>
+#include <errno.h>
 #include "../libs/document.h"
 #include "../libs/markdown.h"
 
@@ -69,6 +70,7 @@ int parse_command(const char *command, char *cmd_type, size_t *pos1, size_t *pos
  * 信号处理函数
  */
 void handle_signal(int sig, siginfo_t *info, void *ucontext) {
+    (void)ucontext; // 未使用的参数
     if (sig == SIGRTMIN) {
         pid_t client_pid = info->si_pid;
 
@@ -655,8 +657,6 @@ void process_command(const char *username, const char *command) {
     }
 
     // 执行命令
-    int result = SUCCESS;
-
     // 只有写权限的用户才能修改文档
     if (role != ROLE_WRITE &&
         (strcmp(cmd_type, "INSERT") == 0 ||
@@ -675,29 +675,29 @@ void process_command(const char *username, const char *command) {
     }
 
     if (strcmp(cmd_type, "INSERT") == 0) {
-        result = markdown_insert(&doc, doc.version, pos1, content);
+        markdown_insert(&doc, doc.version, pos1, content);
     } else if (strcmp(cmd_type, "DEL") == 0) {
-        result = markdown_delete(&doc, doc.version, pos1, pos2);
+        markdown_delete(&doc, doc.version, pos1, pos2);
     } else if (strcmp(cmd_type, "HEADING") == 0) {
-        result = markdown_heading(&doc, doc.version, level, pos1);
+        markdown_heading(&doc, doc.version, level, pos1);
     } else if (strcmp(cmd_type, "BOLD") == 0) {
-        result = markdown_bold(&doc, doc.version, pos1, pos2);
+        markdown_bold(&doc, doc.version, pos1, pos2);
     } else if (strcmp(cmd_type, "ITALIC") == 0) {
-        result = markdown_italic(&doc, doc.version, pos1, pos2);
+        markdown_italic(&doc, doc.version, pos1, pos2);
     } else if (strcmp(cmd_type, "BLOCKQUOTE") == 0) {
-        result = markdown_blockquote(&doc, doc.version, pos1);
+        markdown_blockquote(&doc, doc.version, pos1);
     } else if (strcmp(cmd_type, "ORDERED_LIST") == 0) {
-        result = markdown_ordered_list(&doc, doc.version, pos1);
+        markdown_ordered_list(&doc, doc.version, pos1);
     } else if (strcmp(cmd_type, "UNORDERED_LIST") == 0) {
-        result = markdown_unordered_list(&doc, doc.version, pos1);
+        markdown_unordered_list(&doc, doc.version, pos1);
     } else if (strcmp(cmd_type, "CODE") == 0) {
-        result = markdown_code(&doc, doc.version, pos1, pos2);
+        markdown_code(&doc, doc.version, pos1, pos2);
     } else if (strcmp(cmd_type, "HORIZONTAL_RULE") == 0) {
-        result = markdown_horizontal_rule(&doc, doc.version, pos1);
+        markdown_horizontal_rule(&doc, doc.version, pos1);
     } else if (strcmp(cmd_type, "LINK") == 0) {
-        result = markdown_link(&doc, doc.version, pos1, pos2, content);
+        markdown_link(&doc, doc.version, pos1, pos2, content);
     } else if (strcmp(cmd_type, "NEWLINE") == 0) {
-        result = markdown_newline(&doc, doc.version, pos1);
+        markdown_newline(&doc, doc.version, pos1);
     }
 
     // 记录命令结果
