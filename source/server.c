@@ -729,17 +729,31 @@ void broadcast_update(int version_changed) {
     // 版本号
     fprintf(message_stream, "VERSION %lu\n", doc.version);
 
-    // TODO: 添加编辑历史
+    // 添加编辑历史（示例）
+    fprintf(message_stream, "EDIT server UPDATE SUCCESS\n");
 
     // 结束标记
     fprintf(message_stream, "END\n");
 
     fclose(message_stream);
 
+    printf("[日志] 广播更新消息: %s\n", message);
+
     // 广播给所有客户端
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (clients[i].connected && clients[i].s2c_fd != -1) {
-            write(clients[i].s2c_fd, message, message_len);
+            printf("[日志] 向客户端 %s (PID: %d) 发送更新\n",
+                   clients[i].username, clients[i].pid);
+
+            ssize_t bytes_written = write(clients[i].s2c_fd, message, message_len);
+
+            if (bytes_written < 0) {
+                printf("[错误] 向客户端 %s 发送更新失败: %s\n",
+                       clients[i].username, strerror(errno));
+            } else {
+                printf("[日志] 成功向客户端 %s 发送 %zd 字节的更新\n",
+                       clients[i].username, bytes_written);
+            }
         }
     }
 
