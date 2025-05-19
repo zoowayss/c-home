@@ -33,7 +33,15 @@ static int is_write_permission = 0;
 static int client_running = 1;
 static pthread_mutex_t doc_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-// 命令历史已移除，因为未使用
+// 存储服务器广播的命令日志
+typedef struct {
+    char **log_entries;  // 日志条目数组
+    size_t count;        // 当前日志条目数量
+    size_t capacity;     // 日志数组容量
+} command_log;
+
+// 命令日志
+static command_log log = {NULL, 0, 0};
 
 // 函数声明
 void handle_signal(int sig);
@@ -41,6 +49,8 @@ void *update_thread(void *arg);
 void process_server_update(const char *update);
 void cleanup_resources();
 void print_document();
+void add_log_entry(const char *entry);
+void print_command_log();
 
 /**
  * 主函数
@@ -73,7 +83,6 @@ int main(int argc, char *argv[]) {
 
     // 向服务器发送连接请求
     if (kill(server_pid, SIGRTMIN) == -1) {
-        perror("kill");
         return 1;
     }
 
@@ -84,7 +93,6 @@ int main(int argc, char *argv[]) {
     sigaddset(&wait_mask, SIGRTMIN + 1);
 
     if (sigwait(&wait_mask, &sig) != 0) {
-        perror("sigwait");
         return 1;
     }
 
@@ -95,14 +103,12 @@ int main(int argc, char *argv[]) {
 
     c2s_fd = open(c2s_path, O_WRONLY);
     if (c2s_fd == -1) {
-        perror("open c2s_fd");
         cleanup_resources();
         return 1;
     }
 
     s2c_fd = open(s2c_path, O_RDONLY);
     if (s2c_fd == -1) {
-        perror("open s2c_fd");
         cleanup_resources();
         return 1;
     }
@@ -110,7 +116,6 @@ int main(int argc, char *argv[]) {
     // 发送用户名
     ssize_t bytes_written = write(c2s_fd, username, strlen(username));
     if (bytes_written < 0) {
-        perror("write username");
         cleanup_resources();
         return 1;
     }
@@ -126,7 +131,6 @@ int main(int argc, char *argv[]) {
     while ((size_t)idx < sizeof(role_str) - 1) {
         bytes_read = read(s2c_fd, &c, 1);
         if (bytes_read <= 0) {
-            perror("read");
             cleanup_resources();
             return 1;
         }
@@ -165,7 +169,6 @@ int main(int argc, char *argv[]) {
     while ((size_t)idx < sizeof(version_str) - 1) {
         bytes_read = read(s2c_fd, &c, 1);
         if (bytes_read <= 0) {
-            perror("read version");
             cleanup_resources();
             return 1;
         }
@@ -189,7 +192,6 @@ int main(int argc, char *argv[]) {
     while ((size_t)idx < sizeof(length_str) - 1) {
         bytes_read = read(s2c_fd, &c, 1);
         if (bytes_read <= 0) {
-            perror("read length");
             cleanup_resources();
             return 1;
         }
@@ -211,14 +213,12 @@ int main(int argc, char *argv[]) {
     if (doc_length > 0) {
         char *content = (char *)malloc(doc_length + 1);
         if (!content) {
-            perror("malloc");
             cleanup_resources();
             return 1;
         }
 
         bytes_read = read(s2c_fd, content, doc_length);
         if (bytes_read != (ssize_t)doc_length) {
-            perror("read document");
             free(content);
             cleanup_resources();
             return 1;
@@ -233,7 +233,6 @@ int main(int argc, char *argv[]) {
     // 创建更新线程
     pthread_t update_tid;
     if (pthread_create(&update_tid, NULL, update_thread, NULL) != 0) {
-        perror("pthread_create");
         cleanup_resources();
         return 1;
     }
@@ -249,7 +248,6 @@ int main(int argc, char *argv[]) {
 
         if (fgets(command, MAX_COMMAND_LEN, stdin) == NULL) {
             // 读取错误
-            perror("[错误] 读取用户输入失败");
             break;
         }
 
@@ -273,6 +271,9 @@ int main(int argc, char *argv[]) {
             continue;
         } else if (strcmp(command, "PERM?") == 0) {
             printf("%s\n", is_write_permission ? "write" : "read");
+            continue;
+        } else if (strcmp(command, "LOG?") == 0) {
+            print_command_log();
             continue;
         } else if (strcmp(command, "DISCONNECT") == 0) {
             // 发送断开连接命令给服务器
@@ -457,7 +458,6 @@ void *update_thread(void *arg) {
                 continue;
             } else {
                 // 其他错误
-                perror("poll");
                 client_running = 0;
                 break;
             }
@@ -484,7 +484,6 @@ void *update_thread(void *arg) {
                     continue;
                 } else {
                     // 其他错误
-                    perror("read");
                     client_running = 0;
                     break;
                 }
@@ -522,7 +521,6 @@ void *update_thread(void *arg) {
             }
         }
     }
-
     return NULL;
 }
 
@@ -540,22 +538,42 @@ void process_server_update(const char *update) {
         uint64_t new_version;
         sscanf(update, "VERSION %lu", &new_version);
 
+        // 更新本地文档版本号
         if (new_version > doc.version) {
+            // 保存旧版本号
+            uint64_t old_version = doc.version;
             doc.version = new_version;
+
+            // 如果版本号不连续（可能错过了一些更新），请求完整文档
+            if (new_version > old_version + 1 && old_version > 0) {
+                // 发送DOC?命令请求完整文档
+                write(c2s_fd, "DOC?\n", 5);
+            }
         }
+
+        // 添加到日志
+        char version_log[64];
+        snprintf(version_log, sizeof(version_log), "VERSION %lu", new_version);
+        add_log_entry(version_log);
     } else if (strncmp(update, "EDIT", 4) == 0) {
         // 编辑命令
-        char username[64];
+        char edit_username[64];
         char command[MAX_COMMAND_LEN];
         char status[32];
 
+        // 添加到日志
+        add_log_entry(update);
+
         // 格式: EDIT <username> <command> <status>
-        if (sscanf(update, "EDIT %s %s %s", username, command, status) >= 3) {
+        if (sscanf(update, "EDIT %s %s %s", edit_username, command, status) >= 3) {
             // 如果命令成功执行，更新本地文档
             if (strcmp(status, "SUCCESS") == 0) {
+                // 无论是谁的命令，都应用到本地文档
+                // 这样可以确保所有客户端的文档内容一致
+
                 // 从原始更新消息中提取完整命令
                 char full_command[MAX_COMMAND_LEN];
-                if (sscanf(update, "EDIT %s %[^\n]", username, full_command) >= 2) {
+                if (sscanf(update, "EDIT %s %[^\n]", edit_username, full_command) >= 2) {
                     // 解析命令类型
                     char cmd_type[32];
                     size_t pos1 = 0, pos2 = 0;
@@ -644,6 +662,7 @@ void process_server_update(const char *update) {
         }
     } else if (strncmp(update, "END", 3) == 0) {
         // 更新结束
+        add_log_entry("END");
     }
 }
 
@@ -664,6 +683,17 @@ void cleanup_resources() {
     // 释放文档资源
     markdown_free(&doc);
 
+    // 释放日志资源
+    if (log.log_entries) {
+        for (size_t i = 0; i < log.count; i++) {
+            free(log.log_entries[i]);
+        }
+        free(log.log_entries);
+        log.log_entries = NULL;
+        log.count = 0;
+        log.capacity = 0;
+    }
+
     pthread_mutex_destroy(&doc_mutex);
 }
 
@@ -673,4 +703,41 @@ void cleanup_resources() {
 void print_document() {
     markdown_print(&doc, stdout);
     printf("\n");
+}
+
+/**
+ * 添加日志条目
+ */
+void add_log_entry(const char *entry) {
+    if (!entry) return;
+
+    // 初始化日志数组
+    if (!log.log_entries) {
+        log.capacity = 10;
+        log.log_entries = (char **)malloc(log.capacity * sizeof(char *));
+        if (!log.log_entries) return;
+    }
+
+    // 扩展数组容量
+    if (log.count >= log.capacity) {
+        log.capacity *= 2;
+        char **new_entries = (char **)realloc(log.log_entries, log.capacity * sizeof(char *));
+        if (!new_entries) return;
+        log.log_entries = new_entries;
+    }
+
+    // 添加新条目
+    log.log_entries[log.count] = strdup(entry);
+    if (log.log_entries[log.count]) {
+        log.count++;
+    }
+}
+
+/**
+ * 打印命令日志
+ */
+void print_command_log() {
+    for (size_t i = 0; i < log.count; i++) {
+        printf("%s\n", log.log_entries[i]);
+    }
 }

@@ -43,6 +43,21 @@ typedef struct command_node {
     struct command_node *next;
 } command_node;
 
+// 命令日志条目
+typedef struct {
+    uint64_t version;
+    char **entries;
+    size_t count;
+    size_t capacity;
+} version_log;
+
+// 命令日志
+typedef struct {
+    version_log *versions;
+    size_t count;
+    size_t capacity;
+} command_log;
+
 // 全局变量
 static document doc;
 static client_info clients[MAX_CLIENTS];
@@ -53,6 +68,7 @@ static command_node *command_queue = NULL;
 static pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int update_interval_ms;
 static int server_running = 1;
+static command_log log = {NULL, 0, 0};
 
 // 函数声明
 void handle_signal(int sig, siginfo_t *info, void *ucontext);
@@ -65,6 +81,8 @@ void save_document();
 void cleanup_resources();
 void handle_client_disconnect(int client_index);
 int parse_command(const char *command, char *cmd_type, size_t *pos1, size_t *pos2, char *content, int *level);
+void add_log_entry(uint64_t version, const char *entry);
+void print_command_log();
 
 /**
  * 信号处理函数
@@ -105,7 +123,6 @@ void handle_signal(int sig, siginfo_t *info, void *ucontext) {
 
         int *arg = malloc(sizeof(int));
         if (!arg) {
-            perror("malloc");
             clients[client_index].connected = 0;
             client_count--;
             pthread_mutex_unlock(&client_mutex);
@@ -115,7 +132,6 @@ void handle_signal(int sig, siginfo_t *info, void *ucontext) {
         *arg = client_index;
 
         if (pthread_create(&clients[client_index].thread, &attr, client_handler, arg) != 0) {
-            perror("pthread_create");
             free(arg);
             clients[client_index].connected = 0;
             client_count--;
@@ -160,7 +176,6 @@ int main(int argc, char *argv[]) {
     sa.sa_sigaction = handle_signal;
 
     if (sigaction(SIGRTMIN, &sa, NULL) == -1) {
-        perror("sigaction");
         return 1;
     }
 
@@ -170,7 +185,6 @@ int main(int argc, char *argv[]) {
     // 创建更新线程
     pthread_t update_tid;
     if (pthread_create(&update_tid, NULL, update_thread, NULL) != 0) {
-        perror("pthread_create");
         return 1;
     }
 
@@ -194,8 +208,7 @@ int main(int argc, char *argv[]) {
             } else if (strcmp(command, "LOG?") == 0) {
                 // 输出命令日志
                 pthread_mutex_lock(&doc_mutex);
-                printf("Command log:\n");
-                // TODO: 实现日志输出
+                print_command_log();
                 pthread_mutex_unlock(&doc_mutex);
             } else if (strcmp(command, "QUIT") == 0) {
                 // 检查是否有客户端连接
@@ -248,14 +261,12 @@ void *client_handler(void *arg) {
 
     // 创建新管道
     if (mkfifo(c2s_path, FIFO_PERM) == -1 || mkfifo(s2c_path, FIFO_PERM) == -1) {
-        perror("mkfifo");
         handle_client_disconnect(client_index);
         return NULL;
     }
 
     // 向客户端发送信号，通知管道已创建
     if (kill(client_pid, SIGRTMIN + 1) == -1) {
-        perror("kill");
         unlink(c2s_path);
         unlink(s2c_path);
         handle_client_disconnect(client_index);
@@ -267,7 +278,6 @@ void *client_handler(void *arg) {
     int s2c_fd = open(s2c_path, O_WRONLY);
 
     if (c2s_fd == -1 || s2c_fd == -1) {
-        perror("open");
         if (c2s_fd != -1) close(c2s_fd);
         if (s2c_fd != -1) close(s2c_fd);
         unlink(c2s_path);
@@ -408,7 +418,6 @@ void *client_handler(void *arg) {
                 // 被信号中断，继续
                 continue;
             }
-            perror("select");
             break;
         } else if (ready == 0) {
             // 超时，继续
@@ -588,7 +597,6 @@ void *update_thread(void *arg) {
 client_role get_user_role(const char *username) {
     FILE *roles_file = fopen("roles.txt", "r");
     if (!roles_file) {
-        perror("fopen");
         return ROLE_NONE;
     }
 
@@ -701,7 +709,9 @@ void process_command(const char *username, const char *command) {
     }
 
     // 记录命令结果
-    // TODO: 实现命令日志
+    char log_entry[MAX_COMMAND_LEN + MAX_USERNAME_LEN + 20];
+    snprintf(log_entry, sizeof(log_entry), "EDIT %s %s SUCCESS", username, command);
+    add_log_entry(doc.version, log_entry);
 }
 
 /**
@@ -709,6 +719,38 @@ void process_command(const char *username, const char *command) {
  */
 void broadcast_update(int version_changed) {
     if (!version_changed) {
+        // 即使没有版本变化，也需要广播当前版本号
+        pthread_mutex_lock(&client_mutex);
+        pthread_mutex_lock(&doc_mutex);
+
+        // 构造广播消息
+        char *message = NULL;
+        size_t message_len = 0;
+        FILE *message_stream = open_memstream(&message, &message_len);
+
+        if (!message_stream) {
+            pthread_mutex_unlock(&doc_mutex);
+            pthread_mutex_unlock(&client_mutex);
+            return;
+        }
+
+        // 版本号
+        fprintf(message_stream, "VERSION %lu\n", doc.version);
+        // 结束标记
+        fprintf(message_stream, "END\n");
+
+        fclose(message_stream);
+
+        // 广播给所有客户端
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (clients[i].connected && clients[i].s2c_fd != -1) {
+                write(clients[i].s2c_fd, message, message_len);
+            }
+        }
+
+        free(message);
+        pthread_mutex_unlock(&doc_mutex);
+        pthread_mutex_unlock(&client_mutex);
         return;
     }
 
@@ -729,30 +771,30 @@ void broadcast_update(int version_changed) {
     // 版本号
     fprintf(message_stream, "VERSION %lu\n", doc.version);
 
-    // 添加编辑历史（示例）
-    fprintf(message_stream, "EDIT server UPDATE SUCCESS\n");
+    // 添加编辑历史
+    for (size_t i = 0; i < log.count; i++) {
+        if (log.versions[i].version == doc.version) {
+            for (size_t j = 0; j < log.versions[i].count; j++) {
+                fprintf(message_stream, "%s\n", log.versions[i].entries[j]);
+            }
+            break;
+        }
+    }
 
     // 结束标记
     fprintf(message_stream, "END\n");
 
     fclose(message_stream);
 
-    printf("[日志] 广播更新消息: %s\n", message);
-
     // 广播给所有客户端
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (clients[i].connected && clients[i].s2c_fd != -1) {
-            printf("[日志] 向客户端 %s (PID: %d) 发送更新\n",
-                   clients[i].username, clients[i].pid);
-
             ssize_t bytes_written = write(clients[i].s2c_fd, message, message_len);
-
-            if (bytes_written < 0) {
-                printf("[错误] 向客户端 %s 发送更新失败: %s\n",
-                       clients[i].username, strerror(errno));
-            } else {
-                printf("[日志] 成功向客户端 %s 发送 %zd 字节的更新\n",
-                       clients[i].username, bytes_written);
+            if (bytes_written <= 0) {
+                // 写入失败，可能客户端已断开
+                close(clients[i].s2c_fd);
+                clients[i].s2c_fd = -1;
+                clients[i].connected = 0;
             }
         }
     }
@@ -821,6 +863,22 @@ void cleanup_resources() {
 
     pthread_mutex_unlock(&queue_mutex);
 
+    // 释放日志资源
+    if (log.versions) {
+        for (size_t i = 0; i < log.count; i++) {
+            if (log.versions[i].entries) {
+                for (size_t j = 0; j < log.versions[i].count; j++) {
+                    free(log.versions[i].entries[j]);
+                }
+                free(log.versions[i].entries);
+            }
+        }
+        free(log.versions);
+        log.versions = NULL;
+        log.count = 0;
+        log.capacity = 0;
+    }
+
     // 释放文档资源
     pthread_mutex_lock(&doc_mutex);
     markdown_free(&doc);
@@ -847,11 +905,12 @@ void handle_client_disconnect(int client_index) {
         }
 
         if (clients[client_index].s2c_fd != -1) {
-            close(clients[client_index].s2c_fd = -1);
+            close(clients[client_index].s2c_fd); // 修复：正确关闭文件描述符
             clients[client_index].s2c_fd = -1;
         }
 
         client_count--;
+        printf("客户端 %s 已断开连接\n", clients[client_index].username);
     }
 
     pthread_mutex_unlock(&client_mutex);
@@ -959,4 +1018,80 @@ int parse_command(const char *command, char *cmd_type, size_t *pos1, size_t *pos
     }
 
     return 1;
+}
+
+/**
+ * 添加日志条目
+ */
+void add_log_entry(uint64_t version, const char *entry) {
+    if (!entry) return;
+
+    // 初始化日志数组
+    if (!log.versions) {
+        log.capacity = 10;
+        log.versions = (version_log *)malloc(log.capacity * sizeof(version_log));
+        if (!log.versions) return;
+        memset(log.versions, 0, log.capacity * sizeof(version_log));
+    }
+
+    // 查找版本对应的日志
+    int version_index = -1;
+    for (size_t i = 0; i < log.count; i++) {
+        if (log.versions[i].version == version) {
+            version_index = i;
+            break;
+        }
+    }
+
+    // 如果没有找到，创建新的版本日志
+    if (version_index == -1) {
+        // 扩展数组容量
+        if (log.count >= log.capacity) {
+            log.capacity *= 2;
+            version_log *new_versions = (version_log *)realloc(log.versions, log.capacity * sizeof(version_log));
+            if (!new_versions) return;
+            log.versions = new_versions;
+        }
+
+        version_index = log.count++;
+        log.versions[version_index].version = version;
+        log.versions[version_index].entries = NULL;
+        log.versions[version_index].count = 0;
+        log.versions[version_index].capacity = 0;
+    }
+
+    // 初始化条目数组
+    if (!log.versions[version_index].entries) {
+        log.versions[version_index].capacity = 10;
+        log.versions[version_index].entries = (char **)malloc(log.versions[version_index].capacity * sizeof(char *));
+        if (!log.versions[version_index].entries) return;
+    }
+
+    // 扩展条目数组容量
+    if (log.versions[version_index].count >= log.versions[version_index].capacity) {
+        log.versions[version_index].capacity *= 2;
+        char **new_entries = (char **)realloc(log.versions[version_index].entries,
+                                             log.versions[version_index].capacity * sizeof(char *));
+        if (!new_entries) return;
+        log.versions[version_index].entries = new_entries;
+    }
+
+    // 添加新条目
+    log.versions[version_index].entries[log.versions[version_index].count] = strdup(entry);
+    if (log.versions[version_index].entries[log.versions[version_index].count]) {
+        log.versions[version_index].count++;
+    }
+}
+
+/**
+ * 打印命令日志
+ */
+void print_command_log() {
+    for (size_t i = 0; i < log.count; i++) {
+        printf("VERSION %lu\n", log.versions[i].version);
+        for (size_t j = 0; j < log.versions[i].count; j++) {
+            printf("%s\n", log.versions[i].entries[j]);
+        }
+        printf("END\n");
+    }
 }

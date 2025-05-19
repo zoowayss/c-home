@@ -14,7 +14,7 @@ editing operations.
 The structures and basic operations can be found in the code scaffold You must adhere to the
 function signatures for the marking script to correctly assess your code.
 3 Task
-Implement a simulated collaborative document editing system in C, consisting of two pro￾grams:
+Implement a simulated collaborative document editing system in C, consisting of two programs:
 1. server — the authoritative document host
 • Listens for client connections over named pipes.
 • Maintains the document in an efficient in-memory structure.
@@ -29,7 +29,7 @@ received.
 Deliverables & Constraints
 • Source files: server.c, client.c, plus any helpers.
 • Must compile on Edstem Linux environment using with no warnings (-Wall -Wextra).
-Systems Programming Page 5 of 21
+
 4 Set-up
 Client–Server Connection Protocol
 1. Start the server by running it with the following command. <TIME INTERVAL> is the
@@ -45,7 +45,7 @@ signal is received12
 . Student will not need to handle these conditions.
 5. On receiving SIGRTMIN, the server:
 5.1. Spawns a new POSIX thread to handle that client.
-5.2. Within that thread, creates two named FIFOs to establish bi-directional communi￾cation:
+5.2. Within that thread, creates two named FIFOs to establish bi-directional communication:
 • FIFO_C2S_<client_pid> (Client-to-Server)
 • FIFO_S2C_<client_pid> (Server-to-Client)
 • If either already exist, clean them up first and then create them.
@@ -56,7 +56,7 @@ signal is received12
 and writes its username into FIFO_C2S_<client_pid>.
 1The timeout should not block the server thread, or the server process
 2Timeout is approximate
-Systems Programming Page 6 of 21
+
 Authorisation and Role Communication
 7. After receiving the client’s username (as a newline-terminated ASCII string), the server
 must:
@@ -67,7 +67,7 @@ is authorised and what permission level they possess.
 • The server must send the user’s role (permission) as a single, lowercase ASCII
 string, terminated by exactly one newline character (\n). The role string must
 be one of the following exact values: write, or read.
-• After sending the role, the server must send the full document contents, fol￾lowed immediately by entering the edit-command loop.
+• After sending the role, the server must send the full document contents, followed immediately by entering the edit-command loop.
 (3) If the username is not found:
 • The server must send a rejection message: Reject UNAUTHORISED.
 • Wait for 1 second on this thread alone, not blocking the whole process3
@@ -90,7 +90,7 @@ Document Transmission Protocol
 After sending the role string, the server must transmit the full document contents to the client
 over the named pipe FIFO_S2C_<client_pid>, following these rules:
 3Wait time is approximate
-Systems Programming Page 7 of 21
+
 • The document must be serialised as plain ASCII text, preserving all internal newlines
 (‘\n‘) exactly as they exist in the server’s current document state.
 • The document’s current version will be sent as a newline terminated number, this is
@@ -123,7 +123,7 @@ always be the most up-to-date and the "true" state of the document, whilst the c
 be updated as changes are broadcasted from the server.
 This is necessary to prevent constantly transmitting the entire document over the network,
 which slows down the app.
-Systems Programming Page 8 of 21
+
 The following table contains the formatting that is supported by the document.
 Element Markdown Syntax
 Heading 1 # H1
@@ -156,7 +156,7 @@ render it.
 – Blockquotes
 – Ordered Lists
 – Unordered Lists
-Systems Programming Page 9 of 21
+
 – Horizontal Rules
 • Newline Requirements for Block-level Elements: When inserting a block-level ele￾ment, the editor must:
 – Ensure there is a newline character (‘\n‘) immediately preceding the inserted block
@@ -189,7 +189,7 @@ input of the client or server.
 All positions are interpreted on the version they reference, and if valid, changes are reflected in
 the next broadcasted version. Once edits are made, future edits will need to have their cursor
 positions adjusted if necessary.
-Systems Programming Page 10 of 21
+
 Command Format Constraints
 All commands transmitted between the client and server must satisfy the following properties:
 • The command must be composed exclusively of printable ASCII characters (byte values
@@ -217,7 +217,7 @@ and document version. Newlines are NOT permitted in this command.
 • DEL <pos> <no_char>; Deletes <no_char> characters starting from the specified
 cursor position. If the deletion flows beyond the end of the document, truncate at the end
 of the document.
-Systems Programming Page 11 of 21
+
 Formatting Commands
 Make sure you adhere to the formatting notes 5!
 • NEWLINE <pos>; Inserts newline formatting at the position.
@@ -248,7 +248,7 @@ the list becomes:
 2. cheese
 3. burger
 4. asparagus
-Systems Programming Page 12 of 21
+
 Also if I send a NEWLINE command to the same cursor position to the original list, it becomes:
 1. tomato
 2. cheese
@@ -278,7 +278,7 @@ Server Responses
 • Reject <reason>; Indicates the command was rejected, with a message detailing
 the reason. See Section 7.4.
 These responses are NOT sent immediately, but only sent as part of the broadcast message.
-Systems Programming Page 13 of 21
+
 Server Debugging Commands
 • DOC?; Prints the current document state to the server terminal.
 • LOG?; Outputs a full log of all executed commands in order.
@@ -310,7 +310,7 @@ If your collaborative document contains multiple users, multiple edits may occur
 are queued within each thread. At the TIME INTERVAL update interval, the main server will
 collect all the commands from the thread queues based on timestamp order and process the
 changes in order. The server adds the timestamp when a command arrives.
-Systems Programming Page 14 of 21
+
 Handling Deleted Text and Cursor Position Adjustments All the edits target the broad￾casted document, i.e. what the client was looking at when sending the command. Generally,
 no matter the execution order of the commands queued for a version, the final document will
 look the same. However for commands with overlapping cursors, this is not true and executing
@@ -340,7 +340,7 @@ This example demonstrates a soft insert operation followed by a commit.
 2. Two soft insertions are made at version 0:
 • Insert "World" at position 0.
 • Insert "Hello " also at position 0, effectively pushing "World" to the right.
-Systems Programming Page 15 of 21
+
 3. The document is flattened without committing the changes, and it correctly returns an
 empty string since no version has been committed yet.
 4. After incrementing the version (committing version 0), the document is flattened again
@@ -371,7 +371,7 @@ I love COMP2017
 5. After committing the insertions (by incrementing the version), flattening the document
 will return the final expected sentence:
 I really love COMP2017 so much
-Systems Programming Page 16 of 21
+
 Example: Deleting Items from a Numbered List
 This example shows how consecutive deletions modify a structured list and how renumbering
 is reflected in the final output.
@@ -404,7 +404,7 @@ adjusts cursor positions accordingly.
 • A new broadcast is issued every TIME INTERVAL.
 • Version numbers start from 0 and increment by 1.
 • Version number only increments if at least one edit was made.
-Systems Programming Page 17 of 21
+
 • Even if no changes were made, it’ll broadcast just the version number.
 • All of the following messages are newline terminated.
 • The payload must be closed with an END message.
@@ -435,7 +435,7 @@ specified command.
 INVALID_POSITION One or more provided cursor positions are outside the bounds of the
 current document. For cursor ranges, the end position is equal to or lower than the start
 position.
-Systems Programming Page 18 of 21
+
 DELETED_POSITION The specified cursor position points to text that has already been deleted.
 OUTDATED_VERSION The version targeted by the command is no longer accepted by the
 server. Commands must reference either the current (or previous for COMP9017) docu￾ment version.
@@ -465,7 +465,7 @@ Automated marking will be conducted through the following two categories:
 blockquotes, lists), and version handling.
 • The tests will check for correct document state updates and proper command responses.
 • Submissions will also be checked for memory safety to ensure there are no memory leaks.
-Systems Programming Page 19 of 21
+
 9.2 Staff Client-Server Interoperability Tests
 • A reference staff client and staff server have been implemented to verify
 protocol compliance.
@@ -494,7 +494,7 @@ how did you repair them?
 5. How can select or epoll change our implementation? Are threads still necessary?
 6. Is our program more efficient or runs better than a single process single process model?
 Does non-blocking help? If so in what ways?
-Systems Programming Page 20 of 21
+
 12 Restrictions
 To successfully complete this assignment you must follow the restrictions below. Submissions
 breaking these restrictions will receive a deduction of up to 1 mark per breach.
@@ -520,4 +520,3 @@ not define functions within header files.
 4
 "forcing the seed of a test case" does not count as valid commit. Must cite reason and identified
 failure.
-Systems Programming Page 21 of 21
