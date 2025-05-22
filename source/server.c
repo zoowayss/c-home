@@ -69,6 +69,7 @@ static pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int update_interval_ms;
 static int server_running = 1;
 static command_log log = {NULL, 0, 0};
+static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // 函数声明
 void handle_signal(int sig, siginfo_t *info, void *ucontext);
@@ -450,7 +451,6 @@ void *client_handler(void *arg) {
             write(s2c_fd, role_str, strlen(role_str));
         } else {
             // 添加命令到队列
-            pthread_mutex_lock(&queue_mutex);
 
             command_node *new_node = (command_node *)malloc(sizeof(command_node));
             if (new_node) {
@@ -472,8 +472,6 @@ void *client_handler(void *arg) {
                     current->next = new_node;
                 }
             }
-
-            pthread_mutex_unlock(&queue_mutex);
         }
     }
 
@@ -499,8 +497,8 @@ void *update_thread(void *arg) {
 
         // 处理命令队列
         int version_changed = 0;
+        command_node *command_list = NULL; // 用于临时存储命令队列
 
-        pthread_mutex_lock(&queue_mutex);
 
         // 按时间戳排序命令
         if (command_queue) {
@@ -545,10 +543,13 @@ void *update_thread(void *arg) {
                 lptr = ptr1;
             } while (swapped);
 
-            // 处理排序后的命令
-            pthread_mutex_lock(&doc_mutex);
-
-            command_node *current = command_queue;
+            // 保存排序后的命令队列，并清空全局队列
+            command_list = command_queue;
+            command_queue = NULL;
+        }
+        // 处理命令
+        if (command_list) {
+            command_node *current = command_list;
             command_node *next;
 
             while (current) {
@@ -565,16 +566,8 @@ void *update_thread(void *arg) {
             if (version_changed) {
                 markdown_increment_version(&doc);
             }
-
-            pthread_mutex_unlock(&doc_mutex);
-
-            // 清空命令队列
-            command_queue = NULL;
         }
-
-        pthread_mutex_unlock(&queue_mutex);
-
-        // 广播更新
+        // 广播更新（broadcast_update函数内部会自己获取锁）
         broadcast_update(version_changed);
     }
 
@@ -721,42 +714,7 @@ void process_command(const char *username, const char *command) {
  * 广播更新到所有客户端
  */
 void broadcast_update(int version_changed) {
-    if (!version_changed) {
-        // 即使没有版本变化，也需要广播当前版本号
-        pthread_mutex_lock(&client_mutex);
-        pthread_mutex_lock(&doc_mutex);
-
-        // 构造广播消息
-        char *message = NULL;
-        size_t message_len = 0;
-        FILE *message_stream = open_memstream(&message, &message_len);
-
-        if (!message_stream) {
-            pthread_mutex_unlock(&doc_mutex);
-            pthread_mutex_unlock(&client_mutex);
-            return;
-        }
-
-        // 版本号
-        fprintf(message_stream, "VERSION %lu\n", doc.version);
-        // 结束标记
-        fprintf(message_stream, "END\n");
-
-        fclose(message_stream);
-
-        // 广播给所有客户端
-        for (int i = 0; i < MAX_CLIENTS; i++) {
-            if (clients[i].connected && clients[i].s2c_fd != -1) {
-                write(clients[i].s2c_fd, message, message_len);
-            }
-        }
-
-        free(message);
-        pthread_mutex_unlock(&doc_mutex);
-        pthread_mutex_unlock(&client_mutex);
-        return;
-    }
-
+    // 按照一致的顺序获取锁：先client_mutex，后doc_mutex
     pthread_mutex_lock(&client_mutex);
     pthread_mutex_lock(&doc_mutex);
 
@@ -766,6 +724,7 @@ void broadcast_update(int version_changed) {
     FILE *message_stream = open_memstream(&message, &message_len);
 
     if (!message_stream) {
+        // 按照与获取相反的顺序释放锁
         pthread_mutex_unlock(&doc_mutex);
         pthread_mutex_unlock(&client_mutex);
         return;
@@ -773,6 +732,9 @@ void broadcast_update(int version_changed) {
 
     // 版本号
     fprintf(message_stream, "VERSION %lu\n", doc.version);
+
+    // 获取日志互斥锁
+    pthread_mutex_lock(&log_mutex);
 
     // 添加编辑历史
     for (size_t i = 0; i < log.count; i++) {
@@ -784,6 +746,9 @@ void broadcast_update(int version_changed) {
         }
     }
 
+    // 释放日志互斥锁
+    pthread_mutex_unlock(&log_mutex);
+
     // 结束标记
     fprintf(message_stream, "END\n");
 
@@ -792,6 +757,7 @@ void broadcast_update(int version_changed) {
     // 广播给所有客户端
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (clients[i].connected && clients[i].s2c_fd != -1) {
+            printf("Broadcasting update to client %d %s\n", i, message);
             ssize_t bytes_written = write(clients[i].s2c_fd, message, message_len);
             if (bytes_written <= 0) {
                 // 写入失败，可能客户端已断开
@@ -804,6 +770,7 @@ void broadcast_update(int version_changed) {
 
     free(message);
 
+    // 按照与获取相反的顺序释放锁
     pthread_mutex_unlock(&doc_mutex);
     pthread_mutex_unlock(&client_mutex);
 }
@@ -867,6 +834,7 @@ void cleanup_resources() {
     pthread_mutex_unlock(&queue_mutex);
 
     // 释放日志资源
+    pthread_mutex_lock(&log_mutex);
     if (log.versions) {
         for (size_t i = 0; i < log.count; i++) {
             if (log.versions[i].entries) {
@@ -881,6 +849,7 @@ void cleanup_resources() {
         log.count = 0;
         log.capacity = 0;
     }
+    pthread_mutex_unlock(&log_mutex);
 
     // 释放文档资源
     pthread_mutex_lock(&doc_mutex);
@@ -891,6 +860,7 @@ void cleanup_resources() {
     pthread_mutex_destroy(&client_mutex);
     pthread_mutex_destroy(&doc_mutex);
     pthread_mutex_destroy(&queue_mutex);
+    pthread_mutex_destroy(&log_mutex);
 }
 
 /**
@@ -1034,11 +1004,17 @@ int parse_command(const char *command, char *cmd_type, size_t *pos1, size_t *pos
 void add_log_entry(uint64_t version, const char *entry) {
     if (!entry) return;
 
+    // 获取日志互斥锁
+    pthread_mutex_lock(&log_mutex);
+
     // 初始化日志数组
     if (!log.versions) {
         log.capacity = 10;
         log.versions = (version_log *)malloc(log.capacity * sizeof(version_log));
-        if (!log.versions) return;
+        if (!log.versions) {
+            pthread_mutex_unlock(&log_mutex);
+            return;
+        }
         memset(log.versions, 0, log.capacity * sizeof(version_log));
     }
 
@@ -1057,7 +1033,10 @@ void add_log_entry(uint64_t version, const char *entry) {
         if (log.count >= log.capacity) {
             log.capacity *= 2;
             version_log *new_versions = (version_log *)realloc(log.versions, log.capacity * sizeof(version_log));
-            if (!new_versions) return;
+            if (!new_versions) {
+                pthread_mutex_unlock(&log_mutex);
+                return;
+            }
             log.versions = new_versions;
         }
 
@@ -1072,7 +1051,10 @@ void add_log_entry(uint64_t version, const char *entry) {
     if (!log.versions[version_index].entries) {
         log.versions[version_index].capacity = 10;
         log.versions[version_index].entries = (char **)malloc(log.versions[version_index].capacity * sizeof(char *));
-        if (!log.versions[version_index].entries) return;
+        if (!log.versions[version_index].entries) {
+            pthread_mutex_unlock(&log_mutex);
+            return;
+        }
     }
 
     // 扩展条目数组容量
@@ -1080,7 +1062,10 @@ void add_log_entry(uint64_t version, const char *entry) {
         log.versions[version_index].capacity *= 2;
         char **new_entries = (char **)realloc(log.versions[version_index].entries,
                                              log.versions[version_index].capacity * sizeof(char *));
-        if (!new_entries) return;
+        if (!new_entries) {
+            pthread_mutex_unlock(&log_mutex);
+            return;
+        }
         log.versions[version_index].entries = new_entries;
     }
 
@@ -1089,12 +1074,18 @@ void add_log_entry(uint64_t version, const char *entry) {
     if (log.versions[version_index].entries[log.versions[version_index].count]) {
         log.versions[version_index].count++;
     }
+
+    // 释放日志互斥锁
+    pthread_mutex_unlock(&log_mutex);
 }
 
 /**
  * 打印命令日志
  */
 void print_command_log() {
+    // 获取日志互斥锁
+    pthread_mutex_lock(&log_mutex);
+
     for (size_t i = 0; i < log.count; i++) {
         printf("VERSION %lu\n", log.versions[i].version);
         for (size_t j = 0; j < log.versions[i].count; j++) {
@@ -1102,4 +1093,7 @@ void print_command_log() {
         }
         printf("END\n");
     }
+
+    // 释放日志互斥锁
+    pthread_mutex_unlock(&log_mutex);
 }
