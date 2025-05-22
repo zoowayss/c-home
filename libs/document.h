@@ -13,6 +13,7 @@
 #define INVALID_CURSOR_POS -1
 #define DELETED_POSITION -2
 #define OUTDATED_VERSION -3
+#define UNAUTHORIZED -4
 
 // 定义命令类型
 typedef enum {
@@ -38,6 +39,9 @@ typedef struct edit_command {
     size_t pos2;
     char *content;
     int level;
+    char *username;       // 用户名
+    char *original_cmd;   // 原始命令字符串
+    int status;           // 命令状态 (0=成功, 非0=错误码)
     struct edit_command *next;
 } edit_command;
 
@@ -60,7 +64,7 @@ typedef struct {
 // 辅助函数声明
 chunk *create_chunk(const char *content, size_t length);
 void free_chunk(chunk *c);
-edit_command *create_command(command_type type, uint64_t version, size_t pos1, size_t pos2, const char *content, int level);
+edit_command *create_command(command_type type, uint64_t version, size_t pos1, size_t pos2, const char *content, int level, const char *username, const char *original_cmd);
 void free_command(edit_command *cmd);
 void add_pending_edit(document *doc, edit_command *cmd);
 void add_edit_history(document *doc, edit_command *cmd);

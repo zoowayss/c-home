@@ -499,7 +499,7 @@ void *update_thread(void *arg) {
         int version_changed = 0;
         command_node *command_list = NULL; // 用于临时存储命令队列
 
-
+        pthread_mutex_lock(&queue_mutex);
         // 按时间戳排序命令
         if (command_queue) {
             // 简单的冒泡排序
@@ -562,13 +562,21 @@ void *update_thread(void *arg) {
                 current = next;
             }
 
-            // 如果有命令被处理，增加文档版本号
+            // 如果有命令被处理，先广播更新，再增加文档版本号
             if (version_changed) {
+                pthread_mutex_unlock(&queue_mutex);
+
+                // 广播更新（broadcast_update函数内部会自己获取锁）
+                broadcast_update(version_changed);
+
+                // 增加文档版本号
                 markdown_increment_version(&doc);
+
+                // 继续下一次循环
+                continue;
             }
         }
-        // 广播更新（broadcast_update函数内部会自己获取锁）
-        broadcast_update(version_changed);
+        pthread_mutex_unlock(&queue_mutex);
     }
 
     return NULL;
@@ -621,8 +629,6 @@ void process_command(const char *username, const char *command) {
     int client_index = -1;
     client_role role = ROLE_NONE;
 
-    pthread_mutex_lock(&client_mutex);
-
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (clients[i].connected && strcmp(clients[i].username, username) == 0) {
             client_index = i;
@@ -630,8 +636,6 @@ void process_command(const char *username, const char *command) {
             break;
         }
     }
-
-    pthread_mutex_unlock(&client_mutex);
 
     if (client_index == -1 || role == ROLE_NONE) {
         return; // 用户不存在或未授权
@@ -651,10 +655,12 @@ void process_command(const char *username, const char *command) {
     // 检查版本号是否匹配
     pthread_mutex_lock(&doc_mutex);
     if (cmd_version != doc.version) {
-        // 版本不匹配，记录拒绝原因
-        char log_entry[MAX_COMMAND_LEN + MAX_USERNAME_LEN + 50];
-        snprintf(log_entry, sizeof(log_entry), "EDIT %s %s Reject OUTDATED_VERSION", username, command);
-        add_log_entry(doc.version, log_entry);
+        // 版本不匹配，创建一个状态为 OUTDATED_VERSION 的命令
+        edit_command *cmd = create_command(CMD_INSERT, cmd_version, 0, 0, NULL, 0, username, command);
+        if (cmd) {
+            cmd->status = OUTDATED_VERSION;
+            add_pending_edit(&doc, cmd);
+        }
         pthread_mutex_unlock(&doc_mutex);
         return;
     }
@@ -675,79 +681,89 @@ void process_command(const char *username, const char *command) {
          strcmp(cmd_type, "HORIZONTAL_RULE") == 0 ||
          strcmp(cmd_type, "LINK") == 0 ||
          strcmp(cmd_type, "NEWLINE") == 0)) {
-        return; // 权限不足
+        // 权限不足，创建一个状态为 UNAUTHORIZED 的命令
+        edit_command *cmd = create_command(CMD_INSERT, cmd_version, 0, 0, NULL, 0, username, command);
+        if (cmd) {
+            cmd->status = UNAUTHORIZED;
+            add_pending_edit(&doc, cmd);
+        }
+        return;
     }
 
     if (strcmp(cmd_type, "INSERT") == 0) {
-        markdown_insert(&doc, cmd_version, pos1, content);
+        markdown_insert(&doc, cmd_version, pos1, content, username, command);
     } else if (strcmp(cmd_type, "DEL") == 0) {
-        markdown_delete(&doc, cmd_version, pos1, pos2);
+        markdown_delete(&doc, cmd_version, pos1, pos2, username, command);
     } else if (strcmp(cmd_type, "HEADING") == 0) {
-        markdown_heading(&doc, cmd_version, level, pos1);
+        markdown_heading(&doc, cmd_version, level, pos1, username, command);
     } else if (strcmp(cmd_type, "BOLD") == 0) {
-        markdown_bold(&doc, cmd_version, pos1, pos2);
+        markdown_bold(&doc, cmd_version, pos1, pos2, username, command);
     } else if (strcmp(cmd_type, "ITALIC") == 0) {
-        markdown_italic(&doc, cmd_version, pos1, pos2);
+        markdown_italic(&doc, cmd_version, pos1, pos2, username, command);
     } else if (strcmp(cmd_type, "BLOCKQUOTE") == 0) {
-        markdown_blockquote(&doc, cmd_version, pos1);
+        markdown_blockquote(&doc, cmd_version, pos1, username, command);
     } else if (strcmp(cmd_type, "ORDERED_LIST") == 0) {
-        markdown_ordered_list(&doc, cmd_version, pos1);
+        markdown_ordered_list(&doc, cmd_version, pos1, username, command);
     } else if (strcmp(cmd_type, "UNORDERED_LIST") == 0) {
-        markdown_unordered_list(&doc, cmd_version, pos1);
+        markdown_unordered_list(&doc, cmd_version, pos1, username, command);
     } else if (strcmp(cmd_type, "CODE") == 0) {
-        markdown_code(&doc, cmd_version, pos1, pos2);
+        markdown_code(&doc, cmd_version, pos1, pos2, username, command);
     } else if (strcmp(cmd_type, "HORIZONTAL_RULE") == 0) {
-        markdown_horizontal_rule(&doc, cmd_version, pos1);
+        markdown_horizontal_rule(&doc, cmd_version, pos1, username, command);
     } else if (strcmp(cmd_type, "LINK") == 0) {
-        markdown_link(&doc, cmd_version, pos1, pos2, content);
+        markdown_link(&doc, cmd_version, pos1, pos2, content, username, command);
     } else if (strcmp(cmd_type, "NEWLINE") == 0) {
-        markdown_newline(&doc, cmd_version, pos1);
+        markdown_newline(&doc, cmd_version, pos1, username, command);
     }
 
-    // 记录命令结果
-    char log_entry[MAX_COMMAND_LEN + MAX_USERNAME_LEN + 20];
-    snprintf(log_entry, sizeof(log_entry), "EDIT %s %s SUCCESS", username, command);
-    add_log_entry(doc.version, log_entry);
+    // 不再需要单独记录日志，因为我们现在使用 pending_edits
 }
 
 /**
  * 广播更新到所有客户端
  */
 void broadcast_update(int version_changed) {
-    // 按照一致的顺序获取锁：先client_mutex，后doc_mutex
-    pthread_mutex_lock(&client_mutex);
-    pthread_mutex_lock(&doc_mutex);
-
     // 构造广播消息
     char *message = NULL;
     size_t message_len = 0;
     FILE *message_stream = open_memstream(&message, &message_len);
 
     if (!message_stream) {
-        // 按照与获取相反的顺序释放锁
-        pthread_mutex_unlock(&doc_mutex);
-        pthread_mutex_unlock(&client_mutex);
         return;
     }
 
     // 版本号
     fprintf(message_stream, "VERSION %lu\n", doc.version);
 
-    // 获取日志互斥锁
-    pthread_mutex_lock(&log_mutex);
-
-    // 添加编辑历史
-    for (size_t i = 0; i < log.count; i++) {
-        if (log.versions[i].version == doc.version) {
-            for (size_t j = 0; j < log.versions[i].count; j++) {
-                fprintf(message_stream, "%s\n", log.versions[i].entries[j]);
+    // 使用 pending_edits 构造广播消息
+    pthread_mutex_lock(&doc_mutex);
+    edit_command *cmd = doc.pending_edits;
+    while (cmd) {
+        // 根据命令状态构造消息
+        if (cmd->status == SUCCESS) {
+            fprintf(message_stream, "EDIT %s %s SUCCESS\n", cmd->username, cmd->original_cmd);
+        } else {
+            // 根据错误码构造拒绝消息
+            const char *reason = "UNKNOWN";
+            switch (cmd->status) {
+                case INVALID_CURSOR_POS:
+                    reason = "INVALID_POSITION";
+                    break;
+                case DELETED_POSITION:
+                    reason = "DELETED_POSITION";
+                    break;
+                case OUTDATED_VERSION:
+                    reason = "OUTDATED_VERSION";
+                    break;
+                case UNAUTHORIZED:
+                    reason = "UNAUTHORISED";
+                    break;
             }
-            break;
+            fprintf(message_stream, "EDIT %s %s Reject %s\n", cmd->username, cmd->original_cmd, reason);
         }
+        cmd = cmd->next;
     }
-
-    // 释放日志互斥锁
-    pthread_mutex_unlock(&log_mutex);
+    pthread_mutex_unlock(&doc_mutex);
 
     // 结束标记
     fprintf(message_stream, "END\n");
@@ -769,10 +785,6 @@ void broadcast_update(int version_changed) {
     }
 
     free(message);
-
-    // 按照与获取相反的顺序释放锁
-    pthread_mutex_unlock(&doc_mutex);
-    pthread_mutex_unlock(&client_mutex);
 }
 
 /**

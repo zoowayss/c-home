@@ -226,7 +226,7 @@ int main(int argc, char *argv[]) {
         content[doc_length] = '\0';
 
         // 将内容插入到文档中
-        markdown_insert(&doc, doc.version, 0, content);
+        markdown_insert(&doc, doc.version, 0, content, "client", "INSERT 0 content");
         free(content);
     }
 
@@ -501,62 +501,62 @@ void process_server_update(const char *update) {
                             if (strcmp(cmd_type, "INSERT") == 0) {
                                 // INSERT <pos> <content>
                                 if (sscanf(cmd_part, "%zu %[^\n]", &pos1, content) >= 2) {
-                                    markdown_insert(&doc, doc.version, pos1, content);
+                                    markdown_insert(&doc, doc.version, pos1, content, username, command);
                                 }
                             } else if (strcmp(cmd_type, "DEL") == 0) {
                                 // DEL <pos> <no_char>
                                 if (sscanf(cmd_part, "%zu %zu", &pos1, &pos2) >= 2) {
-                                    markdown_delete(&doc, doc.version, pos1, pos2);
+                                    markdown_delete(&doc, doc.version, pos1, pos2, username, command);
                                 }
                             } else if (strcmp(cmd_type, "HEADING") == 0) {
                                 // HEADING <level> <pos>
                                 if (sscanf(cmd_part, "%d %zu", &level, &pos1) >= 2) {
-                                    markdown_heading(&doc, doc.version, level, pos1);
+                                    markdown_heading(&doc, doc.version, level, pos1, username, command);
                                 }
                             } else if (strcmp(cmd_type, "BOLD") == 0) {
                                 // BOLD <pos_start> <pos_end>
                                 if (sscanf(cmd_part, "%zu %zu", &pos1, &pos2) >= 2) {
-                                    markdown_bold(&doc, doc.version, pos1, pos2);
+                                    markdown_bold(&doc, doc.version, pos1, pos2, username, command);
                                 }
                             } else if (strcmp(cmd_type, "ITALIC") == 0) {
                                 // ITALIC <pos_start> <pos_end>
                                 if (sscanf(cmd_part, "%zu %zu", &pos1, &pos2) >= 2) {
-                                    markdown_italic(&doc, doc.version, pos1, pos2);
+                                    markdown_italic(&doc, doc.version, pos1, pos2, username, command);
                                 }
                             } else if (strcmp(cmd_type, "BLOCKQUOTE") == 0) {
                                 // BLOCKQUOTE <pos>
                                 if (sscanf(cmd_part, "%zu", &pos1) >= 1) {
-                                    markdown_blockquote(&doc, doc.version, pos1);
+                                    markdown_blockquote(&doc, doc.version, pos1, username, command);
                                 }
                             } else if (strcmp(cmd_type, "ORDERED_LIST") == 0) {
                                 // ORDERED_LIST <pos>
                                 if (sscanf(cmd_part, "%zu", &pos1) >= 1) {
-                                    markdown_ordered_list(&doc, doc.version, pos1);
+                                    markdown_ordered_list(&doc, doc.version, pos1, username, command);
                                 }
                             } else if (strcmp(cmd_type, "UNORDERED_LIST") == 0) {
                                 // UNORDERED_LIST <pos>
                                 if (sscanf(cmd_part, "%zu", &pos1) >= 1) {
-                                    markdown_unordered_list(&doc, doc.version, pos1);
+                                    markdown_unordered_list(&doc, doc.version, pos1, username, command);
                                 }
                             } else if (strcmp(cmd_type, "CODE") == 0) {
                                 // CODE <pos_start> <pos_end>
                                 if (sscanf(cmd_part, "%zu %zu", &pos1, &pos2) >= 2) {
-                                    markdown_code(&doc, doc.version, pos1, pos2);
+                                    markdown_code(&doc, doc.version, pos1, pos2, username, command);
                                 }
                             } else if (strcmp(cmd_type, "HORIZONTAL_RULE") == 0) {
                                 // HORIZONTAL_RULE <pos>
                                 if (sscanf(cmd_part, "%zu", &pos1) >= 1) {
-                                    markdown_horizontal_rule(&doc, doc.version, pos1);
+                                    markdown_horizontal_rule(&doc, doc.version, pos1, username, command);
                                 }
                             } else if (strcmp(cmd_type, "LINK") == 0) {
                                 // LINK <pos_start> <pos_end> <link>
                                 if (sscanf(cmd_part, "%zu %zu %[^\n]", &pos1, &pos2, content) >= 3) {
-                                    markdown_link(&doc, doc.version, pos1, pos2, content);
+                                    markdown_link(&doc, doc.version, pos1, pos2, content, username, command);
                                 }
                             } else if (strcmp(cmd_type, "NEWLINE") == 0) {
                                 // NEWLINE <pos>
                                 if (sscanf(cmd_part, "%zu", &pos1) >= 1) {
-                                    markdown_newline(&doc, doc.version, pos1);
+                                    markdown_newline(&doc, doc.version, pos1, username, command);
                                 }
                             }
                         }

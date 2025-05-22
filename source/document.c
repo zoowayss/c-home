@@ -13,18 +13,18 @@ chunk *create_chunk(const char *content, size_t length) {
     if (!new_chunk) {
         return NULL;
     }
-    
+
     new_chunk->content = (char *)malloc(length + 1);
     if (!new_chunk->content) {
         free(new_chunk);
         return NULL;
     }
-    
+
     memcpy(new_chunk->content, content, length);
     new_chunk->content[length] = '\0';
     new_chunk->length = length;
     new_chunk->next = NULL;
-    
+
     return new_chunk;
 }
 
@@ -47,21 +47,25 @@ void free_chunk(chunk *c) {
  * @param pos2 结束位置
  * @param content 内容
  * @param level 级别（用于标题等）
+ * @param username 用户名
+ * @param original_cmd 原始命令字符串
  * @return 新创建的命令指针
  */
-edit_command *create_command(command_type type, uint64_t version, size_t pos1, size_t pos2, const char *content, int level) {
+edit_command *create_command(command_type type, uint64_t version, size_t pos1, size_t pos2, const char *content, int level, const char *username, const char *original_cmd) {
     edit_command *cmd = (edit_command *)malloc(sizeof(edit_command));
     if (!cmd) {
         return NULL;
     }
-    
+
     cmd->type = type;
     cmd->version = version;
     cmd->pos1 = pos1;
     cmd->pos2 = pos2;
     cmd->level = level;
+    cmd->status = SUCCESS; // 默认成功
     cmd->next = NULL;
-    
+
+    // 复制内容
     if (content) {
         cmd->content = strdup(content);
         if (!cmd->content) {
@@ -71,7 +75,32 @@ edit_command *create_command(command_type type, uint64_t version, size_t pos1, s
     } else {
         cmd->content = NULL;
     }
-    
+
+    // 复制用户名
+    if (username) {
+        cmd->username = strdup(username);
+        if (!cmd->username) {
+            free(cmd->content);
+            free(cmd);
+            return NULL;
+        }
+    } else {
+        cmd->username = NULL;
+    }
+
+    // 复制原始命令
+    if (original_cmd) {
+        cmd->original_cmd = strdup(original_cmd);
+        if (!cmd->original_cmd) {
+            free(cmd->username);
+            free(cmd->content);
+            free(cmd);
+            return NULL;
+        }
+    } else {
+        cmd->original_cmd = NULL;
+    }
+
     return cmd;
 }
 
@@ -82,6 +111,8 @@ edit_command *create_command(command_type type, uint64_t version, size_t pos1, s
 void free_command(edit_command *cmd) {
     if (cmd) {
         free(cmd->content);
+        free(cmd->username);
+        free(cmd->original_cmd);
         free(cmd);
     }
 }
@@ -95,7 +126,7 @@ void add_pending_edit(document *doc, edit_command *cmd) {
     if (!doc || !cmd) {
         return;
     }
-    
+
     if (!doc->pending_edits) {
         doc->pending_edits = cmd;
     } else {
@@ -116,7 +147,7 @@ void add_edit_history(document *doc, edit_command *cmd) {
     if (!doc || !cmd) {
         return;
     }
-    
+
     if (!doc->edit_history) {
         doc->edit_history = cmd;
     } else {

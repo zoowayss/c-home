@@ -15,20 +15,20 @@ void markdown_init(document *doc);
 void markdown_free(document *doc);
 
 // === Edit Commands ===
-int markdown_insert(document *doc, uint64_t version, size_t pos, const char *content);
-int markdown_delete(document *doc, uint64_t version, size_t pos, size_t len);
+int markdown_insert(document *doc, uint64_t version, size_t pos, const char *content, const char *username, const char *original_cmd);
+int markdown_delete(document *doc, uint64_t version, size_t pos, size_t len, const char *username, const char *original_cmd);
 
 // === Formatting Commands ===
-int markdown_heading(document *doc, uint64_t version, int level, size_t pos);
-int markdown_bold(document *doc, uint64_t version, size_t start, size_t end);
-int markdown_italic(document *doc, uint64_t version, size_t start, size_t end);
-int markdown_blockquote(document *doc, uint64_t version, size_t pos);
-int markdown_ordered_list(document *doc, uint64_t version, size_t pos);
-int markdown_unordered_list(document *doc, uint64_t version, size_t pos);
-int markdown_code(document *doc, uint64_t version, size_t start, size_t end);
-int markdown_horizontal_rule(document *doc, uint64_t version, size_t pos);
-int markdown_link(document *doc, uint64_t version, size_t start, size_t end, const char *url);
-int markdown_newline(document *doc, uint64_t version, size_t pos);
+int markdown_heading(document *doc, uint64_t version, int level, size_t pos, const char *username, const char *original_cmd);
+int markdown_bold(document *doc, uint64_t version, size_t start, size_t end, const char *username, const char *original_cmd);
+int markdown_italic(document *doc, uint64_t version, size_t start, size_t end, const char *username, const char *original_cmd);
+int markdown_blockquote(document *doc, uint64_t version, size_t pos, const char *username, const char *original_cmd);
+int markdown_ordered_list(document *doc, uint64_t version, size_t pos, const char *username, const char *original_cmd);
+int markdown_unordered_list(document *doc, uint64_t version, size_t pos, const char *username, const char *original_cmd);
+int markdown_code(document *doc, uint64_t version, size_t start, size_t end, const char *username, const char *original_cmd);
+int markdown_horizontal_rule(document *doc, uint64_t version, size_t pos, const char *username, const char *original_cmd);
+int markdown_link(document *doc, uint64_t version, size_t start, size_t end, const char *url, const char *username, const char *original_cmd);
+int markdown_newline(document *doc, uint64_t version, size_t pos, const char *username, const char *original_cmd);
 
 // === Utilities ===
 void markdown_print(const document *doc, FILE *stream);
