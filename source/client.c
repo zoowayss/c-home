@@ -244,7 +244,7 @@ int main(int argc, char *argv[]) {
     char command[MAX_COMMAND_LEN];
     while (client_running) {
         // 使用 fgets 读取用户输入（阻塞模式）
-        printf("> ");
+        // printf("> ");
         fflush(stdout);
 
         if (fgets(command, MAX_COMMAND_LEN, stdin) == NULL) {
