@@ -535,7 +535,29 @@ int markdown_delete(document *doc, uint64_t version, size_t pos, size_t len, con
  * @return 成功返回 SUCCESS，否则返回错误码
  */
 int markdown_newline(document *doc, uint64_t version, size_t pos, const char *username, const char *original_cmd) {
-    return markdown_insert(doc, version, pos, "\n", username, original_cmd);
+    if (!doc) {
+        return INVALID_CURSOR_POS;
+    }
+
+    // 检查版本和位置是否有效
+    if (!is_valid_version(doc, version)) {
+        return OUTDATED_VERSION;
+    }
+
+    if (!is_valid_position(doc, pos)) {
+        return INVALID_CURSOR_POS;
+    }
+
+    // 创建编辑命令并添加到待处理列表
+    edit_command *cmd = create_command(CMD_NEWLINE, version, pos, 0, NULL, 0, username, original_cmd);
+    if (!cmd) {
+        return INVALID_CURSOR_POS; // 内存分配失败
+    }
+
+    add_pending_edit(doc, cmd);
+
+    // 执行实际的换行符插入
+    return direct_insert(doc, pos, "\n", 1);
 }
 
 /**
