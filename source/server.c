@@ -80,7 +80,7 @@ void broadcast_update(int version_changed);
 void save_document();
 void cleanup_resources();
 void handle_client_disconnect(int client_index);
-int parse_command(const char *command, char *cmd_type, size_t *pos1, size_t *pos2, char *content, int *level);
+int parse_command(const char *command, char *cmd_type, size_t *pos1, size_t *pos2, char *content, int *level, uint64_t *version);
 void add_log_entry(uint64_t version, const char *entry);
 void print_command_log();
 
@@ -427,6 +427,7 @@ void *client_handler(void *arg) {
 
         command[bytes_read] = '\0';
 
+        printf("Received command: %s\n", command);
         // 处理命令
         if (strncmp(command, "DISCONNECT", 10) == 0) {
             break;
@@ -552,7 +553,6 @@ void *update_thread(void *arg) {
 
             while (current) {
                 // 处理命令
-                printf("Processing command: %s\n", current->command);
                 process_command(current->username, current->command);
                 version_changed = 1;
 
@@ -649,10 +649,23 @@ void process_command(const char *username, const char *command) {
     size_t pos1 = 0, pos2 = 0;
     char content[MAX_COMMAND_LEN];
     int level = 0;
+    uint64_t cmd_version = 0;
 
-    if (!parse_command(command, cmd_type, &pos1, &pos2, content, &level)) {
+    if (!parse_command(command, cmd_type, &pos1, &pos2, content, &level, &cmd_version)) {
         return; // 命令格式错误
     }
+
+    // 检查版本号是否匹配
+    pthread_mutex_lock(&doc_mutex);
+    if (cmd_version != doc.version) {
+        // 版本不匹配，记录拒绝原因
+        char log_entry[MAX_COMMAND_LEN + MAX_USERNAME_LEN + 50];
+        snprintf(log_entry, sizeof(log_entry), "EDIT %s %s Reject OUTDATED_VERSION", username, command);
+        add_log_entry(doc.version, log_entry);
+        pthread_mutex_unlock(&doc_mutex);
+        return;
+    }
+    pthread_mutex_unlock(&doc_mutex);
 
     // 执行命令
     // 只有写权限的用户才能修改文档
@@ -673,29 +686,29 @@ void process_command(const char *username, const char *command) {
     }
 
     if (strcmp(cmd_type, "INSERT") == 0) {
-        markdown_insert(&doc, doc.version, pos1, content);
+        markdown_insert(&doc, cmd_version, pos1, content);
     } else if (strcmp(cmd_type, "DEL") == 0) {
-        markdown_delete(&doc, doc.version, pos1, pos2);
+        markdown_delete(&doc, cmd_version, pos1, pos2);
     } else if (strcmp(cmd_type, "HEADING") == 0) {
-        markdown_heading(&doc, doc.version, level, pos1);
+        markdown_heading(&doc, cmd_version, level, pos1);
     } else if (strcmp(cmd_type, "BOLD") == 0) {
-        markdown_bold(&doc, doc.version, pos1, pos2);
+        markdown_bold(&doc, cmd_version, pos1, pos2);
     } else if (strcmp(cmd_type, "ITALIC") == 0) {
-        markdown_italic(&doc, doc.version, pos1, pos2);
+        markdown_italic(&doc, cmd_version, pos1, pos2);
     } else if (strcmp(cmd_type, "BLOCKQUOTE") == 0) {
-        markdown_blockquote(&doc, doc.version, pos1);
+        markdown_blockquote(&doc, cmd_version, pos1);
     } else if (strcmp(cmd_type, "ORDERED_LIST") == 0) {
-        markdown_ordered_list(&doc, doc.version, pos1);
+        markdown_ordered_list(&doc, cmd_version, pos1);
     } else if (strcmp(cmd_type, "UNORDERED_LIST") == 0) {
-        markdown_unordered_list(&doc, doc.version, pos1);
+        markdown_unordered_list(&doc, cmd_version, pos1);
     } else if (strcmp(cmd_type, "CODE") == 0) {
-        markdown_code(&doc, doc.version, pos1, pos2);
+        markdown_code(&doc, cmd_version, pos1, pos2);
     } else if (strcmp(cmd_type, "HORIZONTAL_RULE") == 0) {
-        markdown_horizontal_rule(&doc, doc.version, pos1);
+        markdown_horizontal_rule(&doc, cmd_version, pos1);
     } else if (strcmp(cmd_type, "LINK") == 0) {
-        markdown_link(&doc, doc.version, pos1, pos2, content);
+        markdown_link(&doc, cmd_version, pos1, pos2, content);
     } else if (strcmp(cmd_type, "NEWLINE") == 0) {
-        markdown_newline(&doc, doc.version, pos1);
+        markdown_newline(&doc, cmd_version, pos1);
     }
 
     // 记录命令结果
@@ -909,8 +922,8 @@ void handle_client_disconnect(int client_index) {
 /**
  * 解析命令
  */
-int parse_command(const char *command, char *cmd_type, size_t *pos1, size_t *pos2, char *content, int *level) {
-    if (!command || !cmd_type || !pos1 || !pos2 || !content || !level) {
+int parse_command(const char *command, char *cmd_type, size_t *pos1, size_t *pos2, char *content, int *level, uint64_t *version) {
+    if (!command || !cmd_type || !pos1 || !pos2 || !content || !level || !version) {
         return 0;
     }
 
@@ -933,9 +946,14 @@ int parse_command(const char *command, char *cmd_type, size_t *pos1, size_t *pos
     strncpy(cmd_type, token, 31);
     cmd_type[31] = '\0';
 
+    // 解析版本号（所有命令的第一个参数）
+    token = strtok(NULL, " ");
+    if (!token) return 0;
+    *version = strtoull(token, NULL, 10);
+
     // 根据命令类型解析参数
     if (strcmp(cmd_type, "INSERT") == 0) {
-        // INSERT <pos> <content>
+        // INSERT <version> <pos> <content>
         token = strtok(NULL, " ");
         if (!token) return 0;
         *pos1 = atol(token);
@@ -946,7 +964,7 @@ int parse_command(const char *command, char *cmd_type, size_t *pos1, size_t *pos
         content[MAX_COMMAND_LEN - 1] = '\0';
 
     } else if (strcmp(cmd_type, "DEL") == 0) {
-        // DEL <pos> <no_char>
+        // DEL <version> <pos> <no_char>
         token = strtok(NULL, " ");
         if (!token) return 0;
         *pos1 = atol(token);
@@ -956,7 +974,7 @@ int parse_command(const char *command, char *cmd_type, size_t *pos1, size_t *pos
         *pos2 = atol(token);
 
     } else if (strcmp(cmd_type, "HEADING") == 0) {
-        // HEADING <level> <pos>
+        // HEADING <version> <level> <pos>
         token = strtok(NULL, " ");
         if (!token) return 0;
         *level = atoi(token);

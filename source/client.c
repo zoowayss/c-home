@@ -307,8 +307,17 @@ int main(int argc, char *argv[]) {
             printf("Error: You do not have write permission.\n");
             continue;
         }
-        // 发送命令给服务器
-        write(c2s_fd, command, strlen(command));
+        // 构造带版本号的命令
+        // 为了避免截断，我们需要确保命令长度不会超过MAX_COMMAND_LEN
+        size_t cmd_len = strlen(command);
+
+        // 首先发送命令
+        write(c2s_fd, command, cmd_len);
+        // 然后添加空格和版本号
+        char version_str[32];
+        int version_len = snprintf(version_str, sizeof(version_str), " %lu", doc.version);
+        // 发送版本号和换行符
+        write(c2s_fd, version_str, version_len);
         write(c2s_fd, "\n", 1);
     }
 
@@ -435,7 +444,6 @@ void process_server_update(const char *update) {
         return;
     }
 
-    printf("Processing update: %s\n", update);
     // 解析更新消息
     if (strncmp(update, "VERSION", 7) == 0) {
         // 版本更新
