@@ -33,14 +33,14 @@ static int is_write_permission = 0;
 static int client_running = 1;
 static pthread_mutex_t doc_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-// 存储服务器广播的命令日志
+// 存储客户端命令日志
 typedef struct {
     char **log_entries;  // 日志条目数组
     size_t count;        // 当前日志条目数量
     size_t capacity;     // 日志数组容量
 } command_log;
 
-// 命令日志
+// 客户端命令日志
 static command_log log = {NULL, 0, 0};
 
 // 函数声明
@@ -262,6 +262,8 @@ int main(int argc, char *argv[]) {
         if (len == 0) {
             continue;
         }
+        // 记录客户端发送的命令
+        add_log_entry(command);
 
         // 处理本地命令
         if (strcmp(command, "DOC?") == 0) {
@@ -269,13 +271,19 @@ int main(int argc, char *argv[]) {
             print_document();
             pthread_mutex_unlock(&doc_mutex);
             continue;
-        } else if (strcmp(command, "PERM?") == 0) {
+        }
+
+        if (strcmp(command, "PERM?") == 0) {
             printf("%s\n", is_write_permission ? "write" : "read");
             continue;
-        } else if (strcmp(command, "LOG?") == 0) {
+        }
+
+        if (strcmp(command, "LOG?") == 0) {
             print_command_log();
             continue;
-        } else if (strcmp(command, "DISCONNECT") == 0) {
+        }
+
+        if (strcmp(command, "DISCONNECT") == 0) {
             // 发送断开连接命令给服务器
             write(c2s_fd, command, strlen(command));
             write(c2s_fd, "\n", 1);
@@ -299,111 +307,6 @@ int main(int argc, char *argv[]) {
             printf("Error: You do not have write permission.\n");
             continue;
         }
-
-        // 在发送命令前更新本地文档
-        if (strncmp(command, "INSERT", 6) == 0) {
-            // 解析INSERT命令: INSERT <pos> <content>
-            size_t pos;
-            char content[MAX_COMMAND_LEN];
-
-            if (sscanf(command + 6, "%zu %[^\n]", &pos, content) >= 2) {
-                pthread_mutex_lock(&doc_mutex);
-                // 使用markdown_insert函数更新本地文档
-                markdown_insert(&doc, doc.version, pos, content);
-                pthread_mutex_unlock(&doc_mutex);
-            }
-        } else if (strncmp(command, "DEL", 3) == 0) {
-            // 解析DEL命令: DEL <pos> <no_char>
-            size_t pos, len;
-            if (sscanf(command + 3, "%zu %zu", &pos, &len) >= 2) {
-                pthread_mutex_lock(&doc_mutex);
-                markdown_delete(&doc, doc.version, pos, len);
-                pthread_mutex_unlock(&doc_mutex);
-            }
-        } else if (strncmp(command, "HEADING", 7) == 0) {
-            // 解析HEADING命令: HEADING <level> <pos>
-            int level;
-            size_t pos;
-            if (sscanf(command + 7, "%d %zu", &level, &pos) >= 2) {
-                pthread_mutex_lock(&doc_mutex);
-                markdown_heading(&doc, doc.version, level, pos);
-                pthread_mutex_unlock(&doc_mutex);
-            }
-        } else if (strncmp(command, "BOLD", 4) == 0) {
-            // 解析BOLD命令: BOLD <pos_start> <pos_end>
-            size_t start, end;
-            if (sscanf(command + 4, "%zu %zu", &start, &end) >= 2) {
-                pthread_mutex_lock(&doc_mutex);
-                markdown_bold(&doc, doc.version, start, end);
-                pthread_mutex_unlock(&doc_mutex);
-            }
-        } else if (strncmp(command, "ITALIC", 6) == 0) {
-            // 解析ITALIC命令: ITALIC <pos_start> <pos_end>
-            size_t start, end;
-            if (sscanf(command + 6, "%zu %zu", &start, &end) >= 2) {
-                pthread_mutex_lock(&doc_mutex);
-                markdown_italic(&doc, doc.version, start, end);
-                pthread_mutex_unlock(&doc_mutex);
-            }
-        } else if (strncmp(command, "BLOCKQUOTE", 10) == 0) {
-            // 解析BLOCKQUOTE命令: BLOCKQUOTE <pos>
-            size_t pos;
-            if (sscanf(command + 10, "%zu", &pos) >= 1) {
-                pthread_mutex_lock(&doc_mutex);
-                markdown_blockquote(&doc, doc.version, pos);
-                pthread_mutex_unlock(&doc_mutex);
-            }
-        } else if (strncmp(command, "ORDERED_LIST", 12) == 0) {
-            // 解析ORDERED_LIST命令: ORDERED_LIST <pos>
-            size_t pos;
-            if (sscanf(command + 12, "%zu", &pos) >= 1) {
-                pthread_mutex_lock(&doc_mutex);
-                markdown_ordered_list(&doc, doc.version, pos);
-                pthread_mutex_unlock(&doc_mutex);
-            }
-        } else if (strncmp(command, "UNORDERED_LIST", 14) == 0) {
-            // 解析UNORDERED_LIST命令: UNORDERED_LIST <pos>
-            size_t pos;
-            if (sscanf(command + 14, "%zu", &pos) >= 1) {
-                pthread_mutex_lock(&doc_mutex);
-                markdown_unordered_list(&doc, doc.version, pos);
-                pthread_mutex_unlock(&doc_mutex);
-            }
-        } else if (strncmp(command, "CODE", 4) == 0) {
-            // 解析CODE命令: CODE <pos_start> <pos_end>
-            size_t start, end;
-            if (sscanf(command + 4, "%zu %zu", &start, &end) >= 2) {
-                pthread_mutex_lock(&doc_mutex);
-                markdown_code(&doc, doc.version, start, end);
-                pthread_mutex_unlock(&doc_mutex);
-            }
-        } else if (strncmp(command, "HORIZONTAL_RULE", 15) == 0) {
-            // 解析HORIZONTAL_RULE命令: HORIZONTAL_RULE <pos>
-            size_t pos;
-            if (sscanf(command + 15, "%zu", &pos) >= 1) {
-                pthread_mutex_lock(&doc_mutex);
-                markdown_horizontal_rule(&doc, doc.version, pos);
-                pthread_mutex_unlock(&doc_mutex);
-            }
-        } else if (strncmp(command, "LINK", 4) == 0) {
-            // 解析LINK命令: LINK <pos_start> <pos_end> <link>
-            size_t start, end;
-            char link[MAX_COMMAND_LEN];
-            if (sscanf(command + 4, "%zu %zu %[^\n]", &start, &end, link) >= 3) {
-                pthread_mutex_lock(&doc_mutex);
-                markdown_link(&doc, doc.version, start, end, link);
-                pthread_mutex_unlock(&doc_mutex);
-            }
-        } else if (strncmp(command, "NEWLINE", 7) == 0) {
-            // 解析NEWLINE命令: NEWLINE <pos>
-            size_t pos;
-            if (sscanf(command + 7, "%zu", &pos) >= 1) {
-                pthread_mutex_lock(&doc_mutex);
-                markdown_newline(&doc, doc.version, pos);
-                pthread_mutex_unlock(&doc_mutex);
-            }
-        }
-
         // 发送命令给服务器
         write(c2s_fd, command, strlen(command));
         write(c2s_fd, "\n", 1);
@@ -532,6 +435,7 @@ void process_server_update(const char *update) {
         return;
     }
 
+    printf("Processing update: %s\n", update);
     // 解析更新消息
     if (strncmp(update, "VERSION", 7) == 0) {
         // 版本更新
@@ -550,19 +454,11 @@ void process_server_update(const char *update) {
                 write(c2s_fd, "DOC?\n", 5);
             }
         }
-
-        // 添加到日志
-        char version_log[64];
-        snprintf(version_log, sizeof(version_log), "VERSION %lu", new_version);
-        add_log_entry(version_log);
     } else if (strncmp(update, "EDIT", 4) == 0) {
         // 编辑命令
         char edit_username[64];
         char command[MAX_COMMAND_LEN];
         char status[32];
-
-        // 添加到日志
-        add_log_entry(update);
 
         // 格式: EDIT <username> <command> <status>
         if (sscanf(update, "EDIT %s %s %s", edit_username, command, status) >= 3) {
@@ -662,7 +558,6 @@ void process_server_update(const char *update) {
         }
     } else if (strncmp(update, "END", 3) == 0) {
         // 更新结束
-        add_log_entry("END");
     }
 }
 

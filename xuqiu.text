@@ -70,7 +70,7 @@ be one of the following exact values: write, or read.
 • After sending the role, the server must send the full document contents, followed immediately by entering the edit-command loop.
 (3) If the username is not found:
 • The server must send a rejection message: Reject UNAUTHORISED.
-• Wait for 1 second on this thread alone, not blocking the whole process3
+• Wait for 1 second on this thread alone, not blocking the whole process
 .
 • Then close both FIFOs, unlink them (i.e., delete them from the filesystem), and
 terminate the server thread handling that client.

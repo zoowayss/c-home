@@ -199,18 +199,7 @@ int main(int argc, char *argv[]) {
             }
 
             // 处理服务器命令
-            if (strcmp(command, "DOC?") == 0) {
-                pthread_mutex_lock(&doc_mutex);
-                printf("Document content:\n");
-                markdown_print(&doc, stdout);
-                printf("\n");
-                pthread_mutex_unlock(&doc_mutex);
-            } else if (strcmp(command, "LOG?") == 0) {
-                // 输出命令日志
-                pthread_mutex_lock(&doc_mutex);
-                print_command_log();
-                pthread_mutex_unlock(&doc_mutex);
-            } else if (strcmp(command, "QUIT") == 0) {
+            if (strcmp(command, "QUIT") == 0) {
                 // 检查是否有客户端连接
                 pthread_mutex_lock(&client_mutex);
                 int connected_clients = 0;
@@ -563,6 +552,7 @@ void *update_thread(void *arg) {
 
             while (current) {
                 // 处理命令
+                printf("Processing command: %s\n", current->command);
                 process_command(current->username, current->command);
                 version_changed = 1;
 
