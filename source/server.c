@@ -730,6 +730,7 @@ void process_command(const char *username, const char *command) {
  * 广播更新到所有客户端
  */
 void broadcast_update(int version_changed) {
+    (void)version_changed; // 标记参数为未使用
     // 构造广播消息
     char *message = NULL;
     size_t message_len = 0;

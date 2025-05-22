@@ -138,6 +138,101 @@ static int find_position(const document *doc, size_t pos, chunk **chunk_pos, siz
 }
 
 /**
+ * 直接在指定位置插入内容，不创建编辑命令
+ * @param doc 文档指针
+ * @param pos 插入位置
+ * @param content 要插入的内容
+ * @param content_len 内容长度
+ * @return 成功返回 SUCCESS，否则返回错误码
+ */
+static int direct_insert(document *doc, size_t pos, const char *content, size_t content_len) {
+    if (!doc || !content || content_len == 0) {
+        return INVALID_CURSOR_POS;
+    }
+
+    // 如果文档为空，直接创建一个新块
+    if (!doc->head) {
+        doc->head = create_chunk(content, content_len);
+        if (!doc->head) {
+            return INVALID_CURSOR_POS;
+        }
+        doc->total_length = content_len;
+        return SUCCESS;
+    }
+
+    // 查找插入位置
+    chunk *target_chunk;
+    size_t offset;
+
+    if (!find_position(doc, pos, &target_chunk, &offset)) {
+        return INVALID_CURSOR_POS;
+    }
+
+    // 在块中间插入
+    if (offset > 0 && offset < target_chunk->length) {
+        // 分割当前块
+        chunk *new_chunk1 = create_chunk(target_chunk->content, offset);
+        chunk *new_chunk2 = create_chunk(content, content_len);
+        chunk *new_chunk3 = create_chunk(target_chunk->content + offset, target_chunk->length - offset);
+
+        if (!new_chunk1 || !new_chunk2 || !new_chunk3) {
+            free_chunk(new_chunk1);
+            free_chunk(new_chunk2);
+            free_chunk(new_chunk3);
+            return INVALID_CURSOR_POS;
+        }
+
+        new_chunk2->next = new_chunk3;
+        new_chunk1->next = new_chunk2;
+
+        // 替换原块
+        if (doc->head == target_chunk) {
+            doc->head = new_chunk1;
+        } else {
+            chunk *prev = doc->head;
+            while (prev->next != target_chunk) {
+                prev = prev->next;
+            }
+            prev->next = new_chunk1;
+        }
+
+        free_chunk(target_chunk);
+    }
+    // 在块开头插入
+    else if (offset == 0) {
+        chunk *new_chunk = create_chunk(content, content_len);
+        if (!new_chunk) {
+            return INVALID_CURSOR_POS;
+        }
+
+        new_chunk->next = target_chunk;
+
+        if (doc->head == target_chunk) {
+            doc->head = new_chunk;
+        } else {
+            chunk *prev = doc->head;
+            while (prev->next != target_chunk) {
+                prev = prev->next;
+            }
+            prev->next = new_chunk;
+        }
+    }
+    // 在块末尾插入
+    else {
+        chunk *new_chunk = create_chunk(content, content_len);
+        if (!new_chunk) {
+            return INVALID_CURSOR_POS;
+        }
+
+        new_chunk->next = target_chunk->next;
+        target_chunk->next = new_chunk;
+    }
+
+    doc->total_length += content_len;
+    return SUCCESS;
+}
+
+/**
  * 在文档中插入内容
  * @param doc 文档指针
  * @param version 版本号
@@ -472,14 +567,6 @@ int markdown_heading(document *doc, uint64_t version, int level, size_t pos, con
         return INVALID_CURSOR_POS;
     }
 
-    // 创建编辑命令并添加到待处理列表
-    edit_command *cmd = create_command(CMD_HEADING, version, pos, 0, NULL, level, username, original_cmd);
-    if (!cmd) {
-        return INVALID_CURSOR_POS; // 内存分配失败
-    }
-
-    add_pending_edit(doc, cmd);
-
     // 确保在行首插入标题
     char *prefix = NULL;
 
@@ -549,14 +636,14 @@ int markdown_bold(document *doc, uint64_t version, size_t start, size_t end, con
 
     add_pending_edit(doc, cmd);
 
-    // 在结束位置插入 "**"
-    int result = markdown_insert(doc, version, end, "**", username, original_cmd);
+    // 先在结束位置插入 "**"
+    int result = direct_insert(doc, end, "**", 2);
     if (result != SUCCESS) {
         return result;
     }
 
     // 在起始位置插入 "**"
-    return markdown_insert(doc, version, start, "**", username, original_cmd);
+    return direct_insert(doc, start, "**", 2);
 }
 
 /**
@@ -591,14 +678,14 @@ int markdown_italic(document *doc, uint64_t version, size_t start, size_t end, c
 
     add_pending_edit(doc, cmd);
 
-    // 在结束位置插入 "*"
-    int result = markdown_insert(doc, version, end, "*", username, original_cmd);
+    // 先在结束位置插入 "*"
+    int result = direct_insert(doc, end, "*", 1);
     if (result != SUCCESS) {
         return result;
     }
 
     // 在起始位置插入 "*"
-    return markdown_insert(doc, version, start, "*", username, original_cmd);
+    return direct_insert(doc, start, "*", 1);
 }
 
 /**
@@ -623,14 +710,6 @@ int markdown_blockquote(document *doc, uint64_t version, size_t pos, const char 
     if (!is_valid_position(doc, pos)) {
         return INVALID_CURSOR_POS;
     }
-
-    // 创建编辑命令并添加到待处理列表
-    edit_command *cmd = create_command(CMD_BLOCKQUOTE, version, pos, 0, NULL, 0, username, original_cmd);
-    if (!cmd) {
-        return INVALID_CURSOR_POS; // 内存分配失败
-    }
-
-    add_pending_edit(doc, cmd);
 
     // 确保在行首插入引用块
     // 如果不在文档开头，检查前一个字符是否为换行符
@@ -676,14 +755,6 @@ int markdown_ordered_list(document *doc, uint64_t version, size_t pos, const cha
     if (!is_valid_position(doc, pos)) {
         return INVALID_CURSOR_POS;
     }
-
-    // 创建编辑命令并添加到待处理列表
-    edit_command *cmd = create_command(CMD_ORDERED_LIST, version, pos, 0, NULL, 0, username, original_cmd);
-    if (!cmd) {
-        return INVALID_CURSOR_POS; // 内存分配失败
-    }
-
-    add_pending_edit(doc, cmd);
 
     // 确保在行首插入列表
     // 如果不在文档开头，检查前一个字符是否为换行符
@@ -771,14 +842,6 @@ int markdown_unordered_list(document *doc, uint64_t version, size_t pos, const c
         return INVALID_CURSOR_POS;
     }
 
-    // 创建编辑命令并添加到待处理列表
-    edit_command *cmd = create_command(CMD_UNORDERED_LIST, version, pos, 0, NULL, 0, username, original_cmd);
-    if (!cmd) {
-        return INVALID_CURSOR_POS; // 内存分配失败
-    }
-
-    add_pending_edit(doc, cmd);
-
     // 确保在行首插入列表
     // 如果不在文档开头，检查前一个字符是否为换行符
     if (pos > 0) {
@@ -833,14 +896,14 @@ int markdown_code(document *doc, uint64_t version, size_t start, size_t end, con
 
     add_pending_edit(doc, cmd);
 
-    // 在结束位置插入 "`"
-    int result = markdown_insert(doc, version, end, "`", username, original_cmd);
+    // 先在结束位置插入 "`"
+    int result = direct_insert(doc, end, "`", 1);
     if (result != SUCCESS) {
         return result;
     }
 
     // 在起始位置插入 "`"
-    return markdown_insert(doc, version, start, "`", username, original_cmd);
+    return direct_insert(doc, start, "`", 1);
 }
 
 /**
@@ -865,14 +928,6 @@ int markdown_horizontal_rule(document *doc, uint64_t version, size_t pos, const 
     if (!is_valid_position(doc, pos)) {
         return INVALID_CURSOR_POS;
     }
-
-    // 创建编辑命令并添加到待处理列表
-    edit_command *cmd = create_command(CMD_HORIZONTAL_RULE, version, pos, 0, NULL, 0, username, original_cmd);
-    if (!cmd) {
-        return INVALID_CURSOR_POS; // 内存分配失败
-    }
-
-    add_pending_edit(doc, cmd);
 
     // 确保在行首插入水平线
     // 如果不在文档开头，检查前一个字符是否为换行符
@@ -951,14 +1006,14 @@ int markdown_link(document *doc, uint64_t version, size_t start, size_t end, con
     add_pending_edit(doc, cmd);
 
     // 构造链接格式：[文本](URL)
-    // 首先在结束位置插入 "](URL)"
+    // 先在结束位置插入 "](URL)"
     char *suffix = (char *)malloc(strlen(url) + 4); // "](" + url + ")"
     if (!suffix) {
         return INVALID_CURSOR_POS; // 内存分配失败
     }
 
     sprintf(suffix, "](%s)", url);
-    int result = markdown_insert(doc, version, end, suffix, username, original_cmd);
+    int result = direct_insert(doc, end, suffix, strlen(suffix));
     free(suffix);
 
     if (result != SUCCESS) {
@@ -966,7 +1021,7 @@ int markdown_link(document *doc, uint64_t version, size_t start, size_t end, con
     }
 
     // 在起始位置插入 "["
-    return markdown_insert(doc, version, start, "[", username, original_cmd);
+    return direct_insert(doc, start, "[", 1);
 }
 
 /**
