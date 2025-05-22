@@ -33,6 +33,8 @@ static int is_write_permission = 0;
 static int client_running = 1;
 static pthread_mutex_t doc_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+// 用于处理服务器消息的状态 - 已移除，因为新格式将EDIT和状态放在同一行
+
 // 存储客户端命令日志
 typedef struct {
     char **log_entries;  // 日志条目数组
@@ -47,6 +49,7 @@ static command_log log = {NULL, 0, 0};
 void handle_signal(int sig);
 void *update_thread(void *arg);
 void process_server_update(const char *update);
+void sync_full_document(const char *content);
 void cleanup_resources();
 void print_document();
 void add_log_entry(const char *entry);
@@ -239,8 +242,6 @@ int main(int argc, char *argv[]) {
 
     // 主循环，处理用户输入
     char command[MAX_COMMAND_LEN];
-    printf("Enter commands (type 'DISCONNECT' to exit):\n");
-
     while (client_running) {
         // 使用 fgets 读取用户输入（阻塞模式）
         printf("> ");
@@ -307,18 +308,12 @@ int main(int argc, char *argv[]) {
             printf("Error: You do not have write permission.\n");
             continue;
         }
-        // 构造带版本号的命令
-        // 为了避免截断，我们需要确保命令长度不会超过MAX_COMMAND_LEN
-        size_t cmd_len = strlen(command);
+        // 构造完整的命令字符串 这里去掉换行符
+        char full_command[MAX_COMMAND_LEN];
+        int full_len = snprintf(full_command, sizeof(full_command), "%s %lu", command, doc.version);
 
-        // 首先发送命令
-        write(c2s_fd, command, cmd_len);
-        // 然后添加空格和版本号
-        char version_str[32];
-        int version_len = snprintf(version_str, sizeof(version_str), " %lu", doc.version);
-        // 发送版本号和换行符
-        write(c2s_fd, version_str, version_len);
-        write(c2s_fd, "\n", 1);
+        // 发送完整命令
+        write(c2s_fd, full_command, full_len);
     }
 
     // 等待更新线程结束
@@ -444,129 +439,232 @@ void process_server_update(const char *update) {
         return;
     }
 
+
     // 解析更新消息
     if (strncmp(update, "VERSION", 7) == 0) {
         // 版本更新
-        uint64_t new_version;
-        sscanf(update, "VERSION %lu", &new_version);
+        uint64_t broadcast_version;
+        sscanf(update, "VERSION %lu", &broadcast_version);
 
-        // 更新本地文档版本号
-        if (new_version > doc.version) {
-            // 保存旧版本号
-            uint64_t old_version = doc.version;
-            doc.version = new_version;
-
-            // 如果版本号不连续（可能错过了一些更新），请求完整文档
-            if (new_version > old_version + 1 && old_version > 0) {
-                // 发送DOC?命令请求完整文档
-                write(c2s_fd, "DOC?\n", 5);
-            }
+        // 检查本地文档版本是否与广播版本一致
+        if (broadcast_version != doc.version) {
+            // 版本不一致，可能错过了更新，请求完整文档
+            write(c2s_fd, "DOC?", 4);
         }
+
+        // 更新全局版本号变量（但不更新doc.version，等到END时再更新）
+        document_version = broadcast_version;
     } else if (strncmp(update, "EDIT", 4) == 0) {
-        // 编辑命令
-        char edit_username[64];
-        char command[MAX_COMMAND_LEN];
-        char status[32];
+        // EDIT命令行，新格式: EDIT <username> <command> <status>
+        // 解析EDIT行，找到最后一个单词作为状态
+        char edit_line[MAX_COMMAND_LEN];
+        strncpy(edit_line, update, MAX_COMMAND_LEN - 1);
+        edit_line[MAX_COMMAND_LEN - 1] = '\0';
+        // 找到最后一个空格，分离状态部分
+        char *last_space = strrchr(edit_line, ' ');
+        if (last_space) {
+            *last_space = '\0'; // 分离命令部分和状态部分
+            char *status = last_space + 1;
 
-        // 格式: EDIT <username> <command> <status>
-        if (sscanf(update, "EDIT %s %s %s", edit_username, command, status) >= 3) {
-            // 如果命令成功执行，更新本地文档
+            // 检查状态
             if (strcmp(status, "SUCCESS") == 0) {
-                // 无论是谁的命令，都应用到本地文档
-                // 这样可以确保所有客户端的文档内容一致
+                // 命令成功，解析并执行EDIT命令
+                char edit_username[64];
+                char cmd_type[32];
 
-                // 从原始更新消息中提取完整命令
-                char full_command[MAX_COMMAND_LEN];
-                if (sscanf(update, "EDIT %s %[^\n]", edit_username, full_command) >= 2) {
-                    // 解析命令类型
-                    char cmd_type[32];
-                    size_t pos1 = 0, pos2 = 0;
-                    char content[MAX_COMMAND_LEN];
-                    int level = 0;
+                // 解析EDIT行: EDIT <username> <command_type> <args...>
+                char *edit_part = edit_line + 5; // 跳过"EDIT "
+                char *first_space = strchr(edit_part, ' ');
+                if (first_space) {
+                    // 提取用户名
+                    size_t username_len = first_space - edit_part;
+                    strncpy(edit_username, edit_part, username_len);
+                    edit_username[username_len] = '\0';
 
-                    // 跳过用户名和EDIT部分
-                    char *cmd_part = strchr(full_command, ' ');
-                    if (cmd_part) {
-                        cmd_part++; // 跳过空格
-
+                    // 提取命令部分
+                    char *cmd_part = first_space + 1;
+                    char *cmd_space = strchr(cmd_part, ' ');
+                    if (cmd_space) {
                         // 提取命令类型
-                        char *space = strchr(cmd_part, ' ');
-                        if (space) {
-                            size_t cmd_len = space - cmd_part;
-                            strncpy(cmd_type, cmd_part, cmd_len);
-                            cmd_type[cmd_len] = '\0';
-                            cmd_part = space + 1; // 跳过空格
+                        size_t cmd_type_len = cmd_space - cmd_part;
+                        strncpy(cmd_type, cmd_part, cmd_type_len);
+                        cmd_type[cmd_type_len] = '\0';
 
-                            // 根据命令类型解析参数
-                            if (strcmp(cmd_type, "INSERT") == 0) {
-                                // INSERT <pos> <content>
-                                if (sscanf(cmd_part, "%zu %[^\n]", &pos1, content) >= 2) {
-                                    markdown_insert(&doc, doc.version, pos1, content, username, command);
+                        // 提取参数部分
+                        char *args = cmd_space + 1;
+
+                        // 移除版本号：找到args中倒数第二个空格，版本号在最后
+                        char args_without_version[MAX_COMMAND_LEN];
+                        strncpy(args_without_version, args, MAX_COMMAND_LEN - 1);
+                        args_without_version[MAX_COMMAND_LEN - 1] = '\0';
+
+                        // 找到最后一个空格（版本号前的空格）
+                        char *version_space = strrchr(args_without_version, ' ');
+                        if (version_space) {
+                            *version_space = '\0'; // 截断，移除版本号
+                            args = args_without_version; // 使用移除版本号后的参数
+                        }
+
+                        // 解析命令参数并执行相应操作
+                        size_t pos1 = 0, pos2 = 0;
+                        char content[MAX_COMMAND_LEN];
+                        int level = 0;
+
+                        if (strcmp(cmd_type, "INSERT") == 0) {
+                            // INSERT <pos> <content>
+                            // 手动解析以正确处理包含空格的内容
+                            char *pos_end = strchr(args, ' ');
+                            if (pos_end) {
+                                *pos_end = '\0';
+                                pos1 = atol(args);
+                                char *content_start = pos_end + 1;
+                                if (strlen(content_start) > 0) {
+                                    strncpy(content, content_start, MAX_COMMAND_LEN - 1);
+                                    content[MAX_COMMAND_LEN - 1] = '\0';
+                                    markdown_insert(&doc, doc.version, pos1, content, edit_username, cmd_part);
                                 }
-                            } else if (strcmp(cmd_type, "DEL") == 0) {
-                                // DEL <pos> <no_char>
-                                if (sscanf(cmd_part, "%zu %zu", &pos1, &pos2) >= 2) {
-                                    markdown_delete(&doc, doc.version, pos1, pos2, username, command);
+                            }
+                        } else if (strcmp(cmd_type, "DEL") == 0) {
+                            // DEL <pos> <no_char>
+                            if (sscanf(args, "%zu %zu", &pos1, &pos2) >= 2) {
+                                markdown_delete(&doc, doc.version, pos1, pos2, edit_username, cmd_part);
+                            }
+                        } else if (strcmp(cmd_type, "HEADING") == 0) {
+                            // HEADING <level> <pos>
+                            if (sscanf(args, "%d %zu", &level, &pos1) >= 2) {
+                                markdown_heading(&doc, doc.version, level, pos1, edit_username, cmd_part);
+                            }
+                        } else if (strcmp(cmd_type, "BOLD") == 0) {
+                            // BOLD <pos_start> <pos_end>
+                            if (sscanf(args, "%zu %zu", &pos1, &pos2) >= 2) {
+                                markdown_bold(&doc, doc.version, pos1, pos2, edit_username, cmd_part);
+                            }
+                        } else if (strcmp(cmd_type, "ITALIC") == 0) {
+                            // ITALIC <pos_start> <pos_end>
+                            if (sscanf(args, "%zu %zu", &pos1, &pos2) >= 2) {
+                                markdown_italic(&doc, doc.version, pos1, pos2, edit_username, cmd_part);
+                            }
+                        } else if (strcmp(cmd_type, "BLOCKQUOTE") == 0) {
+                            // BLOCKQUOTE <pos>
+                            if (sscanf(args, "%zu", &pos1) >= 1) {
+                                markdown_blockquote(&doc, doc.version, pos1, edit_username, cmd_part);
+                            }
+                        } else if (strcmp(cmd_type, "ORDERED_LIST") == 0) {
+                            // ORDERED_LIST <pos>
+                            if (sscanf(args, "%zu", &pos1) >= 1) {
+                                markdown_ordered_list(&doc, doc.version, pos1, edit_username, cmd_part);
+                            }
+                        } else if (strcmp(cmd_type, "UNORDERED_LIST") == 0) {
+                            // UNORDERED_LIST <pos>
+                            if (sscanf(args, "%zu", &pos1) >= 1) {
+                                markdown_unordered_list(&doc, doc.version, pos1, edit_username, cmd_part);
+                            }
+                        } else if (strcmp(cmd_type, "CODE") == 0) {
+                            // CODE <pos_start> <pos_end>
+                            if (sscanf(args, "%zu %zu", &pos1, &pos2) >= 2) {
+                                markdown_code(&doc, doc.version, pos1, pos2, edit_username, cmd_part);
+                            }
+                        } else if (strcmp(cmd_type, "HORIZONTAL_RULE") == 0) {
+                            // HORIZONTAL_RULE <pos>
+                            if (sscanf(args, "%zu", &pos1) >= 1) {
+                                markdown_horizontal_rule(&doc, doc.version, pos1, edit_username, cmd_part);
+                            }
+                        } else if (strcmp(cmd_type, "LINK") == 0) {
+                            // LINK <pos_start> <pos_end> <link>
+                            // 手动解析以正确处理包含空格的链接
+                            char *first_space = strchr(args, ' ');
+                            if (first_space) {
+                                *first_space = '\0';
+                                pos1 = atol(args);
+                                char *second_space = strchr(first_space + 1, ' ');
+                                if (second_space) {
+                                    *second_space = '\0';
+                                    pos2 = atol(first_space + 1);
+                                    char *link_start = second_space + 1;
+                                    if (strlen(link_start) > 0) {
+                                        strncpy(content, link_start, MAX_COMMAND_LEN - 1);
+                                        content[MAX_COMMAND_LEN - 1] = '\0';
+                                        markdown_link(&doc, doc.version, pos1, pos2, content, edit_username, cmd_part);
+                                    }
                                 }
-                            } else if (strcmp(cmd_type, "HEADING") == 0) {
-                                // HEADING <level> <pos>
-                                if (sscanf(cmd_part, "%d %zu", &level, &pos1) >= 2) {
-                                    markdown_heading(&doc, doc.version, level, pos1, username, command);
-                                }
-                            } else if (strcmp(cmd_type, "BOLD") == 0) {
-                                // BOLD <pos_start> <pos_end>
-                                if (sscanf(cmd_part, "%zu %zu", &pos1, &pos2) >= 2) {
-                                    markdown_bold(&doc, doc.version, pos1, pos2, username, command);
-                                }
-                            } else if (strcmp(cmd_type, "ITALIC") == 0) {
-                                // ITALIC <pos_start> <pos_end>
-                                if (sscanf(cmd_part, "%zu %zu", &pos1, &pos2) >= 2) {
-                                    markdown_italic(&doc, doc.version, pos1, pos2, username, command);
-                                }
-                            } else if (strcmp(cmd_type, "BLOCKQUOTE") == 0) {
-                                // BLOCKQUOTE <pos>
-                                if (sscanf(cmd_part, "%zu", &pos1) >= 1) {
-                                    markdown_blockquote(&doc, doc.version, pos1, username, command);
-                                }
-                            } else if (strcmp(cmd_type, "ORDERED_LIST") == 0) {
-                                // ORDERED_LIST <pos>
-                                if (sscanf(cmd_part, "%zu", &pos1) >= 1) {
-                                    markdown_ordered_list(&doc, doc.version, pos1, username, command);
-                                }
-                            } else if (strcmp(cmd_type, "UNORDERED_LIST") == 0) {
-                                // UNORDERED_LIST <pos>
-                                if (sscanf(cmd_part, "%zu", &pos1) >= 1) {
-                                    markdown_unordered_list(&doc, doc.version, pos1, username, command);
-                                }
-                            } else if (strcmp(cmd_type, "CODE") == 0) {
-                                // CODE <pos_start> <pos_end>
-                                if (sscanf(cmd_part, "%zu %zu", &pos1, &pos2) >= 2) {
-                                    markdown_code(&doc, doc.version, pos1, pos2, username, command);
-                                }
-                            } else if (strcmp(cmd_type, "HORIZONTAL_RULE") == 0) {
-                                // HORIZONTAL_RULE <pos>
-                                if (sscanf(cmd_part, "%zu", &pos1) >= 1) {
-                                    markdown_horizontal_rule(&doc, doc.version, pos1, username, command);
-                                }
-                            } else if (strcmp(cmd_type, "LINK") == 0) {
-                                // LINK <pos_start> <pos_end> <link>
-                                if (sscanf(cmd_part, "%zu %zu %[^\n]", &pos1, &pos2, content) >= 3) {
-                                    markdown_link(&doc, doc.version, pos1, pos2, content, username, command);
-                                }
-                            } else if (strcmp(cmd_type, "NEWLINE") == 0) {
-                                // NEWLINE <pos>
-                                if (sscanf(cmd_part, "%zu", &pos1) >= 1) {
-                                    markdown_newline(&doc, doc.version, pos1, username, command);
-                                }
+                            }
+                        } else if (strcmp(cmd_type, "NEWLINE") == 0) {
+                            // NEWLINE <pos>
+                            if (sscanf(args, "%zu", &pos1) >= 1) {
+                                markdown_newline(&doc, doc.version, pos1, edit_username, cmd_part);
                             }
                         }
                     }
                 }
+            } else if (strncmp(status, "Reject", 6) == 0) {
+                // 命令被拒绝
+                char reason[64] = "";
+                sscanf(status, "Reject %s", reason);
+                printf("命令被拒绝 (原因: %s)\n", reason);
             }
         }
     } else if (strncmp(update, "END", 3) == 0) {
-        // 更新结束
+        // 更新结束，将本地文档版本+1，与服务器保持同步
+        markdown_increment_version(&doc);
+        document_version = doc.version;
+    } else {
+        // 检查是否是版本号（纯数字）
+        char *endptr;
+        uint64_t parsed_version = strtoull(update, &endptr, 10);
+
+        if (*endptr == '\0' || (*endptr == '\n' && *(endptr + 1) == '\0')) {
+            // 这是一个版本号，说明接下来会收到文档内容
+            printf("接收到服务器版本号: %lu\n", parsed_version);
+            document_version = parsed_version;
+            // 版本号已接收，等待下一行的文档内容
+        } else {
+            // 这是文档内容，进行全量同步
+            sync_full_document(update);
+        }
     }
+}
+
+/**
+ * 同步完整文档内容
+ * 当版本不一致或客户端请求完整文档时调用
+ */
+void sync_full_document(const char *content) {
+    if (!content) {
+        return;
+    }
+
+    // 释放当前文档内容
+    markdown_free(&doc);
+
+    // 重新初始化文档
+    markdown_init(&doc);
+
+    // 处理文档内容
+    size_t content_len = strlen(content);
+    if (content_len > 0) {
+        // 检查内容是否只是换行符（空文档的情况）
+        if (content_len == 1 && content[0] == '\n') {
+        } else {
+            // 将完整内容插入到文档的开始位置
+            // 移除末尾的换行符（如果有的话）
+            char *clean_content = strdup(content);
+            if (clean_content) {
+                size_t clean_len = strlen(clean_content);
+                if (clean_len > 0 && clean_content[clean_len - 1] == '\n') {
+                    clean_content[clean_len - 1] = '\0';
+                }
+
+                if (strlen(clean_content) > 0) {
+                    markdown_insert(&doc, doc.version, 0, clean_content, "server", "FULL_SYNC");
+                }
+                free(clean_content);
+            }
+        }
+    } else {
+    }
+
+    // 更新本地版本号为服务器版本
+    doc.version = document_version;
 }
 
 /**

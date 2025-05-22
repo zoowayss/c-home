@@ -433,13 +433,20 @@ void *client_handler(void *arg) {
         if (strncmp(command, "DISCONNECT", 10) == 0) {
             break;
         } else if (strncmp(command, "DOC?", 4) == 0) {
-            // 发送文档内容
+            // 发送文档内容和版本号
             pthread_mutex_lock(&doc_mutex);
             char *content = markdown_flatten(&doc);
+            uint64_t current_version = doc.version;
             pthread_mutex_unlock(&doc_mutex);
+
+            // 先发送版本号
+            char version_str[32];
+            snprintf(version_str, sizeof(version_str), "%lu\n", current_version);
+            write(s2c_fd, version_str, strlen(version_str));
 
             if (content) {
                 write(s2c_fd, content, strlen(content));
+                printf("send content: %s\n", content);
                 write(s2c_fd, "\n", 1);
                 free(content);
             } else {
@@ -451,7 +458,6 @@ void *client_handler(void *arg) {
             write(s2c_fd, role_str, strlen(role_str));
         } else {
             // 添加命令到队列
-
             command_node *new_node = (command_node *)malloc(sizeof(command_node));
             if (new_node) {
                 strncpy(new_node->username, username, MAX_USERNAME_LEN - 1);
@@ -566,7 +572,7 @@ void *update_thread(void *arg) {
             if (version_changed) {
                 pthread_mutex_unlock(&queue_mutex);
 
-                // 广播更新（broadcast_update函数内部会自己获取锁）
+                // 广播更新（函数内部会自己获取锁）
                 broadcast_update(version_changed);
 
                 // 增加文档版本号
@@ -654,6 +660,7 @@ void process_command(const char *username, const char *command) {
 
     // 检查版本号是否匹配
     pthread_mutex_lock(&doc_mutex);
+    printf("cmd_version: %lu, doc.version: %lu\n", cmd_version, doc.version);
     if (cmd_version != doc.version) {
         // 版本不匹配，创建一个状态为 OUTDATED_VERSION 的命令
         edit_command *cmd = create_command(CMD_INSERT, cmd_version, 0, 0, NULL, 0, username, command);
@@ -739,9 +746,12 @@ void broadcast_update(int version_changed) {
     pthread_mutex_lock(&doc_mutex);
     edit_command *cmd = doc.pending_edits;
     while (cmd) {
-        // 根据命令状态构造消息
+        // 构造EDIT行：EDIT <username> <command>
+        fprintf(message_stream, "EDIT %s %s", cmd->username, cmd->original_cmd);
+
+        // 根据命令状态构造状态行
         if (cmd->status == SUCCESS) {
-            fprintf(message_stream, "EDIT %s %s SUCCESS\n", cmd->username, cmd->original_cmd);
+            fprintf(message_stream, " SUCCESS\n");
         } else {
             // 根据错误码构造拒绝消息
             const char *reason = "UNKNOWN";
@@ -759,7 +769,7 @@ void broadcast_update(int version_changed) {
                     reason = "UNAUTHORISED";
                     break;
             }
-            fprintf(message_stream, "EDIT %s %s Reject %s\n", cmd->username, cmd->original_cmd, reason);
+            fprintf(message_stream, " Reject %s\n", reason);
         }
         cmd = cmd->next;
     }
@@ -773,7 +783,7 @@ void broadcast_update(int version_changed) {
     // 广播给所有客户端
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (clients[i].connected && clients[i].s2c_fd != -1) {
-            printf("Broadcasting update to client %d %s\n", i, message);
+            printf("Broadcasting message:%s\n", message);
             ssize_t bytes_written = write(clients[i].s2c_fd, message, message_len);
             if (bytes_written <= 0) {
                 // 写入失败，可能客户端已断开
@@ -902,7 +912,9 @@ void handle_client_disconnect(int client_index) {
 }
 
 /**
- * 解析命令
+ * 解析命令 - 重构版本，版本号在最后一位
+ * 新格式：INSERT <pos> <content> <version>
+ * 修复：手动解析以保留内容中的空格
  */
 int parse_command(const char *command, char *cmd_type, size_t *pos1, size_t *pos2, char *content, int *level, uint64_t *version) {
     if (!command || !cmd_type || !pos1 || !pos2 || !content || !level || !version) {
@@ -917,65 +929,66 @@ int parse_command(const char *command, char *cmd_type, size_t *pos1, size_t *pos
     size_t len = strlen(cmd_copy);
     if (len > 0 && cmd_copy[len - 1] == '\n') {
         cmd_copy[len - 1] = '\0';
+        len--;
     }
+
+    // 手动解析命令，避免使用strtok丢失空格
+    char *ptr = cmd_copy;
+
+    // 跳过开头的空格
+    while (*ptr == ' ') ptr++;
 
     // 解析命令类型
-    char *token = strtok(cmd_copy, " ");
-    if (!token) {
-        return 0;
-    }
+    char *cmd_start = ptr;
+    while (*ptr && *ptr != ' ') ptr++;
+    if (*ptr == '\0') return 0; // 命令不完整
 
-    strncpy(cmd_type, token, 31);
-    cmd_type[31] = '\0';
+    size_t cmd_len = ptr - cmd_start;
+    if (cmd_len > 31) cmd_len = 31;
+    strncpy(cmd_type, cmd_start, cmd_len);
+    cmd_type[cmd_len] = '\0';
 
-    // 解析版本号（所有命令的第一个参数）
-    token = strtok(NULL, " ");
-    if (!token) return 0;
-    *version = strtoull(token, NULL, 10);
+    // 跳过空格
+    while (*ptr == ' ') ptr++;
+
+    // 找到最后一个空格，分离版本号
+    char *last_space = strrchr(ptr, ' ');
+    if (!last_space) return 0; // 没有版本号
+
+    // 解析版本号
+    *version = strtoull(last_space + 1, NULL, 10);
+
+    // 截断版本号部分，保留参数部分
+    *last_space = '\0';
+    char *args = ptr;
 
     // 根据命令类型解析参数
     if (strcmp(cmd_type, "INSERT") == 0) {
-        // INSERT <version> <pos> <content>
-        token = strtok(NULL, " ");
-        if (!token) return 0;
-        *pos1 = atol(token);
+        // INSERT <pos> <content>
+        char *pos_end = strchr(args, ' ');
+        if (!pos_end) return 0; // 缺少内容部分
 
-        token = strtok(NULL, "");
-        if (!token) return 0;
-        strncpy(content, token, MAX_COMMAND_LEN - 1);
+        *pos_end = '\0';
+        *pos1 = atol(args);
+
+        // 内容部分（保留所有空格）
+        char *content_start = pos_end + 1;
+        strncpy(content, content_start, MAX_COMMAND_LEN - 1);
         content[MAX_COMMAND_LEN - 1] = '\0';
 
     } else if (strcmp(cmd_type, "DEL") == 0) {
-        // DEL <version> <pos> <no_char>
-        token = strtok(NULL, " ");
-        if (!token) return 0;
-        *pos1 = atol(token);
-
-        token = strtok(NULL, " ");
-        if (!token) return 0;
-        *pos2 = atol(token);
+        // DEL <pos> <no_char>
+        if (sscanf(args, "%zu %zu", pos1, pos2) != 2) return 0;
 
     } else if (strcmp(cmd_type, "HEADING") == 0) {
-        // HEADING <version> <level> <pos>
-        token = strtok(NULL, " ");
-        if (!token) return 0;
-        *level = atoi(token);
-
-        token = strtok(NULL, " ");
-        if (!token) return 0;
-        *pos1 = atol(token);
+        // HEADING <level> <pos>
+        if (sscanf(args, "%d %zu", level, pos1) != 2) return 0;
 
     } else if (strcmp(cmd_type, "BOLD") == 0 ||
                strcmp(cmd_type, "ITALIC") == 0 ||
                strcmp(cmd_type, "CODE") == 0) {
         // <cmd> <pos_start> <pos_end>
-        token = strtok(NULL, " ");
-        if (!token) return 0;
-        *pos1 = atol(token);
-
-        token = strtok(NULL, " ");
-        if (!token) return 0;
-        *pos2 = atol(token);
+        if (sscanf(args, "%zu %zu", pos1, pos2) != 2) return 0;
 
     } else if (strcmp(cmd_type, "BLOCKQUOTE") == 0 ||
                strcmp(cmd_type, "ORDERED_LIST") == 0 ||
@@ -983,23 +996,25 @@ int parse_command(const char *command, char *cmd_type, size_t *pos1, size_t *pos
                strcmp(cmd_type, "HORIZONTAL_RULE") == 0 ||
                strcmp(cmd_type, "NEWLINE") == 0) {
         // <cmd> <pos>
-        token = strtok(NULL, " ");
-        if (!token) return 0;
-        *pos1 = atol(token);
+        if (sscanf(args, "%zu", pos1) != 1) return 0;
 
     } else if (strcmp(cmd_type, "LINK") == 0) {
         // LINK <pos_start> <pos_end> <link>
-        token = strtok(NULL, " ");
-        if (!token) return 0;
-        *pos1 = atol(token);
+        char *first_space = strchr(args, ' ');
+        if (!first_space) return 0;
 
-        token = strtok(NULL, " ");
-        if (!token) return 0;
-        *pos2 = atol(token);
+        *first_space = '\0';
+        *pos1 = atol(args);
 
-        token = strtok(NULL, "");
-        if (!token) return 0;
-        strncpy(content, token, MAX_COMMAND_LEN - 1);
+        char *second_space = strchr(first_space + 1, ' ');
+        if (!second_space) return 0;
+
+        *second_space = '\0';
+        *pos2 = atol(first_space + 1);
+
+        // 链接内容（保留所有空格）
+        char *link_start = second_space + 1;
+        strncpy(content, link_start, MAX_COMMAND_LEN - 1);
         content[MAX_COMMAND_LEN - 1] = '\0';
 
     } else {
