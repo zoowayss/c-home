@@ -308,12 +308,7 @@ int main(int argc, char *argv[]) {
             printf("Error: You do not have write permission.\n");
             continue;
         }
-        // 构造完整的命令字符串 这里去掉换行符
-        char full_command[MAX_COMMAND_LEN];
-        int full_len = snprintf(full_command, sizeof(full_command), "%s %lu", command, doc.version);
-
-        // 发送完整命令
-        write(c2s_fd, full_command, full_len);
+        write(c2s_fd, command, strlen(command));
     }
 
     // 等待更新线程结束
@@ -490,20 +485,8 @@ void process_server_update(const char *update) {
                         strncpy(cmd_type, cmd_part, cmd_type_len);
                         cmd_type[cmd_type_len] = '\0';
 
-                        // 提取参数部分
+                        // 提取参数部分（不再需要移除版本号）
                         char *args = cmd_space + 1;
-
-                        // 移除版本号：找到args中倒数第二个空格，版本号在最后
-                        char args_without_version[MAX_COMMAND_LEN];
-                        strncpy(args_without_version, args, MAX_COMMAND_LEN - 1);
-                        args_without_version[MAX_COMMAND_LEN - 1] = '\0';
-
-                        // 找到最后一个空格（版本号前的空格）
-                        char *version_space = strrchr(args_without_version, ' ');
-                        if (version_space) {
-                            *version_space = '\0'; // 截断，移除版本号
-                            args = args_without_version; // 使用移除版本号后的参数
-                        }
 
                         // 解析命令参数并执行相应操作
                         size_t pos1 = 0, pos2 = 0;

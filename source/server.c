@@ -658,19 +658,9 @@ void process_command(const char *username, const char *command) {
         return; // 命令格式错误
     }
 
-    // 检查版本号是否匹配
+    // 获取当前文档版本号用于执行命令
     pthread_mutex_lock(&doc_mutex);
-    printf("cmd_version: %lu, doc.version: %lu\n", cmd_version, doc.version);
-    if (cmd_version != doc.version) {
-        // 版本不匹配，创建一个状态为 OUTDATED_VERSION 的命令
-        edit_command *cmd = create_command(CMD_INSERT, cmd_version, 0, 0, NULL, 0, username, command);
-        if (cmd) {
-            cmd->status = OUTDATED_VERSION;
-            add_pending_edit(&doc, cmd);
-        }
-        pthread_mutex_unlock(&doc_mutex);
-        return;
-    }
+    uint64_t current_version = doc.version;
     pthread_mutex_unlock(&doc_mutex);
 
     // 执行命令
@@ -689,7 +679,7 @@ void process_command(const char *username, const char *command) {
          strcmp(cmd_type, "LINK") == 0 ||
          strcmp(cmd_type, "NEWLINE") == 0)) {
         // 权限不足，创建一个状态为 UNAUTHORIZED 的命令
-        edit_command *cmd = create_command(CMD_INSERT, cmd_version, 0, 0, NULL, 0, username, command);
+        edit_command *cmd = create_command(CMD_INSERT, current_version, 0, 0, NULL, 0, username, command);
         if (cmd) {
             cmd->status = UNAUTHORIZED;
             add_pending_edit(&doc, cmd);
@@ -698,29 +688,29 @@ void process_command(const char *username, const char *command) {
     }
 
     if (strcmp(cmd_type, "INSERT") == 0) {
-        markdown_insert(&doc, cmd_version, pos1, content, username, command);
+        markdown_insert(&doc, current_version, pos1, content, username, command);
     } else if (strcmp(cmd_type, "DEL") == 0) {
-        markdown_delete(&doc, cmd_version, pos1, pos2, username, command);
+        markdown_delete(&doc, current_version, pos1, pos2, username, command);
     } else if (strcmp(cmd_type, "HEADING") == 0) {
-        markdown_heading(&doc, cmd_version, level, pos1, username, command);
+        markdown_heading(&doc, current_version, level, pos1, username, command);
     } else if (strcmp(cmd_type, "BOLD") == 0) {
-        markdown_bold(&doc, cmd_version, pos1, pos2, username, command);
+        markdown_bold(&doc, current_version, pos1, pos2, username, command);
     } else if (strcmp(cmd_type, "ITALIC") == 0) {
-        markdown_italic(&doc, cmd_version, pos1, pos2, username, command);
+        markdown_italic(&doc, current_version, pos1, pos2, username, command);
     } else if (strcmp(cmd_type, "BLOCKQUOTE") == 0) {
-        markdown_blockquote(&doc, cmd_version, pos1, username, command);
+        markdown_blockquote(&doc, current_version, pos1, username, command);
     } else if (strcmp(cmd_type, "ORDERED_LIST") == 0) {
-        markdown_ordered_list(&doc, cmd_version, pos1, username, command);
+        markdown_ordered_list(&doc, current_version, pos1, username, command);
     } else if (strcmp(cmd_type, "UNORDERED_LIST") == 0) {
-        markdown_unordered_list(&doc, cmd_version, pos1, username, command);
+        markdown_unordered_list(&doc, current_version, pos1, username, command);
     } else if (strcmp(cmd_type, "CODE") == 0) {
-        markdown_code(&doc, cmd_version, pos1, pos2, username, command);
+        markdown_code(&doc, current_version, pos1, pos2, username, command);
     } else if (strcmp(cmd_type, "HORIZONTAL_RULE") == 0) {
-        markdown_horizontal_rule(&doc, cmd_version, pos1, username, command);
+        markdown_horizontal_rule(&doc, current_version, pos1, username, command);
     } else if (strcmp(cmd_type, "LINK") == 0) {
-        markdown_link(&doc, cmd_version, pos1, pos2, content, username, command);
+        markdown_link(&doc, current_version, pos1, pos2, content, username, command);
     } else if (strcmp(cmd_type, "NEWLINE") == 0) {
-        markdown_newline(&doc, cmd_version, pos1, username, command);
+        markdown_newline(&doc, current_version, pos1, username, command);
     }
 
     // 不再需要单独记录日志，因为我们现在使用 pending_edits
@@ -913,14 +903,17 @@ void handle_client_disconnect(int client_index) {
 }
 
 /**
- * 解析命令 - 重构版本，版本号在最后一位
- * 新格式：INSERT <pos> <content> <version>
+ * 解析命令 - 不包含版本号
+ * 格式：INSERT <pos> <content>
  * 修复：手动解析以保留内容中的空格
  */
 int parse_command(const char *command, char *cmd_type, size_t *pos1, size_t *pos2, char *content, int *level, uint64_t *version) {
     if (!command || !cmd_type || !pos1 || !pos2 || !content || !level || !version) {
         return 0;
     }
+
+    // 版本号设为0，表示不使用版本检查
+    *version = 0;
 
     // 移除末尾的换行符
     char cmd_copy[MAX_COMMAND_LEN];
@@ -942,25 +935,21 @@ int parse_command(const char *command, char *cmd_type, size_t *pos1, size_t *pos
     // 解析命令类型
     char *cmd_start = ptr;
     while (*ptr && *ptr != ' ') ptr++;
-    if (*ptr == '\0') return 0; // 命令不完整
 
     size_t cmd_len = ptr - cmd_start;
     if (cmd_len > 31) cmd_len = 31;
     strncpy(cmd_type, cmd_start, cmd_len);
     cmd_type[cmd_len] = '\0';
 
+    // 如果命令后没有参数，直接返回（如某些单参数命令）
+    if (*ptr == '\0') {
+        return 1;
+    }
+
     // 跳过空格
     while (*ptr == ' ') ptr++;
 
-    // 找到最后一个空格，分离版本号
-    char *last_space = strrchr(ptr, ' ');
-    if (!last_space) return 0; // 没有版本号
-
-    // 解析版本号
-    *version = strtoull(last_space + 1, NULL, 10);
-
-    // 截断版本号部分，保留参数部分
-    *last_space = '\0';
+    // 参数部分（不再分离版本号）
     char *args = ptr;
 
     // 根据命令类型解析参数
