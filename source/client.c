@@ -595,6 +595,11 @@ void process_server_update(const char *update) {
         // 更新结束，将本地文档版本+1，与服务器保持同步
         markdown_increment_version(doc);
         document_version = doc->version;
+    } else if(strncmp(update, "Reject", 6) == 0){
+        // Reject UNAUTHORISED
+        char reason[64] = "";
+        sscanf(update, "Reject %s", reason);
+        printf("Reject %s\n", reason);
     } else {
         // 检查是否是版本号（纯数字）
         char *endptr;
@@ -609,6 +614,7 @@ void process_server_update(const char *update) {
             // 这是文档内容，进行全量同步
             sync_full_document(update);
         }
+    
     }
 }
 

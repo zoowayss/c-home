@@ -382,7 +382,7 @@ void *client_handler(void *arg) {
         }
     } else {
         // 未授权用户
-        write(s2c_fd, "Reject UNAUTHORISED.\n", 21);
+        write(s2c_fd, "Reject UNAUTHORISED.\n", 22);
 
         // 等待1秒
         sleep(1);
