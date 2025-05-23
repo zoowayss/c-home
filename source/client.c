@@ -309,7 +309,8 @@ int main(int argc, char *argv[]) {
              strncmp(command, "HORIZONTAL_RULE", 15) == 0 ||
              strncmp(command, "LINK", 4) == 0 ||
              strncmp(command, "NEWLINE", 7) == 0)) {
-            printf("Error: You do not have write permission.\n");
+            // EDIT 用户名 命令 状态
+            printf("EDIT %s %s Reject %s\n", username, command, "UNAUTHORISED");
             continue;
         }
         write(c2s_fd, command, strlen(command));
