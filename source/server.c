@@ -679,7 +679,7 @@ void process_command(const char *username, const char *command) {
          strcmp(cmd_type, "LINK") == 0 ||
          strcmp(cmd_type, "NEWLINE") == 0)) {
         // 权限不足，创建一个状态为 UNAUTHORIZED 的命令
-        edit_command *cmd = create_command(CMD_INSERT, current_version, 0, 0, NULL, 0, username, command);
+        edit_command *cmd = create_command(CMD_INSERT, current_version, 0, 0, NULL, 0);
         if (cmd) {
             cmd->status = UNAUTHORIZED;
             add_pending_edit(&doc, cmd);
@@ -687,30 +687,62 @@ void process_command(const char *username, const char *command) {
         return;
     }
 
+    // 构造包含用户名的完整命令字符串用于日志
+    char full_command[MAX_COMMAND_LEN * 2];
+    snprintf(full_command, sizeof(full_command), "%s %s", username, command);
+
+    int result = SUCCESS;
+
     if (strcmp(cmd_type, "INSERT") == 0) {
-        markdown_insert(&doc, current_version, pos1, content, username, command);
+        result = markdown_insert(&doc, current_version, pos1, content);
     } else if (strcmp(cmd_type, "DEL") == 0) {
-        markdown_delete(&doc, current_version, pos1, pos2, username, command);
+        result = markdown_delete(&doc, current_version, pos1, pos2);
     } else if (strcmp(cmd_type, "HEADING") == 0) {
-        markdown_heading(&doc, current_version, level, pos1, username, command);
+        result = markdown_heading(&doc, current_version, level, pos1);
     } else if (strcmp(cmd_type, "BOLD") == 0) {
-        markdown_bold(&doc, current_version, pos1, pos2, username, command);
+        result = markdown_bold(&doc, current_version, pos1, pos2);
     } else if (strcmp(cmd_type, "ITALIC") == 0) {
-        markdown_italic(&doc, current_version, pos1, pos2, username, command);
+        result = markdown_italic(&doc, current_version, pos1, pos2);
     } else if (strcmp(cmd_type, "BLOCKQUOTE") == 0) {
-        markdown_blockquote(&doc, current_version, pos1, username, command);
+        result = markdown_blockquote(&doc, current_version, pos1);
     } else if (strcmp(cmd_type, "ORDERED_LIST") == 0) {
-        markdown_ordered_list(&doc, current_version, pos1, username, command);
+        result = markdown_ordered_list(&doc, current_version, pos1);
     } else if (strcmp(cmd_type, "UNORDERED_LIST") == 0) {
-        markdown_unordered_list(&doc, current_version, pos1, username, command);
+        result = markdown_unordered_list(&doc, current_version, pos1);
     } else if (strcmp(cmd_type, "CODE") == 0) {
-        markdown_code(&doc, current_version, pos1, pos2, username, command);
+        result = markdown_code(&doc, current_version, pos1, pos2);
     } else if (strcmp(cmd_type, "HORIZONTAL_RULE") == 0) {
-        markdown_horizontal_rule(&doc, current_version, pos1, username, command);
+        result = markdown_horizontal_rule(&doc, current_version, pos1);
     } else if (strcmp(cmd_type, "LINK") == 0) {
-        markdown_link(&doc, current_version, pos1, pos2, content, username, command);
+        result = markdown_link(&doc, current_version, pos1, pos2, content);
     } else if (strcmp(cmd_type, "NEWLINE") == 0) {
-        markdown_newline(&doc, current_version, pos1, username, command);
+        result = markdown_newline(&doc, current_version, pos1);
+    }
+
+    // 根据执行结果处理
+    if (result == SUCCESS) {
+        // 成功执行，添加到服务器命令日志
+        add_server_cmd_log(&doc, full_command, current_version);
+    } else {
+        // 执行失败，也添加到服务器命令日志，但标记为错误
+        char error_command[MAX_COMMAND_LEN * 2 + 50];
+        const char *error_reason = "UNKNOWN";
+        switch (result) {
+            case INVALID_CURSOR_POS:
+                error_reason = "INVALID_POSITION";
+                break;
+            case DELETED_POSITION:
+                error_reason = "DELETED_POSITION";
+                break;
+            case OUTDATED_VERSION:
+                error_reason = "OUTDATED_VERSION";
+                break;
+            case UNAUTHORIZED:
+                error_reason = "UNAUTHORISED";
+                break;
+        }
+        snprintf(error_command, sizeof(error_command), "%s ERROR:%s", full_command, error_reason);
+        add_server_cmd_log(&doc, error_command, current_version);
     }
 
     // 不再需要单独记录日志，因为我们现在使用 pending_edits
@@ -733,44 +765,53 @@ void broadcast_update(int version_changed) {
     // 版本号
     fprintf(message_stream, "VERSION %lu\n", doc.version);
 
-    // 使用 pending_edits 构造广播消息
+    // 使用服务器命令日志构造广播消息
     pthread_mutex_lock(&doc_mutex);
-    edit_command *cmd = doc.pending_edits;
-    // original_cmd 去除换行
-    char original_cmd[MAX_COMMAND_LEN];
-    strncpy(original_cmd, cmd->original_cmd, MAX_COMMAND_LEN - 1);
-    original_cmd[MAX_COMMAND_LEN - 1] = '\0';
-    if (original_cmd[strlen(original_cmd) - 1] == '\n') {
-        original_cmd[strlen(original_cmd) - 1] = '\0';
-    }
-    while (cmd) {
-        // 构造EDIT行：EDIT <username> <command>
-        fprintf(message_stream, "EDIT %s %s", cmd->username, original_cmd);
+    server_cmd_log *log_entry = doc.cmd_log_head;
 
-        // 根据命令状态构造状态行
-        if (cmd->status == SUCCESS) {
-            fprintf(message_stream, " SUCCESS\n");
-        } else {
-            // 根据错误码构造拒绝消息
-            const char *reason = "UNKNOWN";
-            switch (cmd->status) {
-                case INVALID_CURSOR_POS:
-                    reason = "INVALID_POSITION";
-                    break;
-                case DELETED_POSITION:
-                    reason = "DELETED_POSITION";
-                    break;
-                case OUTDATED_VERSION:
-                    reason = "OUTDATED_VERSION";
-                    break;
-                case UNAUTHORIZED:
-                    reason = "UNAUTHORISED";
-                    break;
+    while (log_entry) {
+        // 只处理当前版本的命令
+        if (log_entry->version == doc.version) {
+            // 去除命令字符串末尾的换行符
+            char clean_command[MAX_COMMAND_LEN * 2];
+            strncpy(clean_command, log_entry->command, sizeof(clean_command) - 1);
+            clean_command[sizeof(clean_command) - 1] = '\0';
+
+            size_t len = strlen(clean_command);
+            if (len > 0 && clean_command[len - 1] == '\n') {
+                clean_command[len - 1] = '\0';
             }
-            fprintf(message_stream, " Reject %s\n", reason);
+
+            // 解析命令字符串：格式为 "username command" 或 "username command ERROR:reason"
+            char *space_pos = strchr(clean_command, ' ');
+            if (space_pos) {
+                *space_pos = '\0';  // 分割用户名和命令
+                char *username = clean_command;
+                char *command_part = space_pos + 1;
+
+                // 检查是否包含错误信息
+                char *error_pos = strstr(command_part, " ERROR:");
+                if (error_pos) {
+                    *error_pos = '\0';  // 分割命令和错误信息
+                    char *command = command_part;
+                    char *error_reason = error_pos + 7;  // 跳过 " ERROR:"
+
+                    // 构造EDIT行：EDIT <username> <command> Reject <reason>
+                    fprintf(message_stream, "EDIT %s %s Reject %s\n", username, command, error_reason);
+                } else {
+                    // 成功的命令
+                    fprintf(message_stream, "EDIT %s %s SUCCESS\n", username, command_part);
+                }
+            } else {
+                // 如果解析失败，使用默认格式
+                fprintf(message_stream, "EDIT server %s SUCCESS\n", clean_command);
+            }
         }
-        cmd = cmd->next;
+        log_entry = log_entry->next;
     }
+
+    // 不再需要检查 pending_edits，所有信息都在服务器命令日志中
+
     pthread_mutex_unlock(&doc_mutex);
 
     // 结束标记

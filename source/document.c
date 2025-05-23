@@ -47,11 +47,9 @@ void free_chunk(chunk *c) {
  * @param pos2 结束位置
  * @param content 内容
  * @param level 级别（用于标题等）
- * @param username 用户名
- * @param original_cmd 原始命令字符串
  * @return 新创建的命令指针
  */
-edit_command *create_command(command_type type, uint64_t version, size_t pos1, size_t pos2, const char *content, int level, const char *username, const char *original_cmd) {
+edit_command *create_command(command_type type, uint64_t version, size_t pos1, size_t pos2, const char *content, int level) {
     edit_command *cmd = (edit_command *)malloc(sizeof(edit_command));
     if (!cmd) {
         return NULL;
@@ -76,31 +74,6 @@ edit_command *create_command(command_type type, uint64_t version, size_t pos1, s
         cmd->content = NULL;
     }
 
-    // 复制用户名
-    if (username) {
-        cmd->username = strdup(username);
-        if (!cmd->username) {
-            free(cmd->content);
-            free(cmd);
-            return NULL;
-        }
-    } else {
-        cmd->username = NULL;
-    }
-
-    // 复制原始命令
-    if (original_cmd) {
-        cmd->original_cmd = strdup(original_cmd);
-        if (!cmd->original_cmd) {
-            free(cmd->username);
-            free(cmd->content);
-            free(cmd);
-            return NULL;
-        }
-    } else {
-        cmd->original_cmd = NULL;
-    }
-
     return cmd;
 }
 
@@ -111,8 +84,6 @@ edit_command *create_command(command_type type, uint64_t version, size_t pos1, s
 void free_command(edit_command *cmd) {
     if (cmd) {
         free(cmd->content);
-        free(cmd->username);
-        free(cmd->original_cmd);
         free(cmd);
     }
 }
@@ -156,5 +127,72 @@ void add_edit_history(document *doc, edit_command *cmd) {
             current = current->next;
         }
         current->next = cmd;
+    }
+}
+
+/**
+ * 创建一个新的服务器命令日志节点
+ * @param command 命令字符串
+ * @param version 版本号
+ * @return 新创建的日志节点指针
+ */
+server_cmd_log *create_server_cmd_log(const char *command, uint64_t version) {
+    server_cmd_log *log = (server_cmd_log *)malloc(sizeof(server_cmd_log));
+    if (!log) {
+        return NULL;
+    }
+
+    log->version = version;
+    log->next = NULL;
+
+    // 复制命令字符串
+    if (command) {
+        log->command = strdup(command);
+        if (!log->command) {
+            free(log);
+            return NULL;
+        }
+    } else {
+        log->command = NULL;
+    }
+
+    return log;
+}
+
+/**
+ * 释放服务器命令日志节点及其内容
+ * @param log 要释放的日志节点
+ */
+void free_server_cmd_log(server_cmd_log *log) {
+    if (log) {
+        free(log->command);
+        free(log);
+    }
+}
+
+/**
+ * 添加服务器命令日志到文档
+ * @param doc 文档
+ * @param command 命令字符串
+ * @param version 版本号
+ */
+void add_server_cmd_log(document *doc, const char *command, uint64_t version) {
+    if (!doc || !command) {
+        return;
+    }
+
+    server_cmd_log *new_log = create_server_cmd_log(command, version);
+    if (!new_log) {
+        return;
+    }
+
+    if (!doc->cmd_log_head) {
+        doc->cmd_log_head = new_log;
+    } else {
+        server_cmd_log *current = doc->cmd_log_head;
+        while (current->next) {
+            current = current->next;
+        }
+        current->next = new_log;
     }
 }

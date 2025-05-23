@@ -39,11 +39,16 @@ typedef struct edit_command {
     size_t pos2;
     char *content;
     int level;
-    char *username;       // 用户名
-    char *original_cmd;   // 原始命令字符串
     int status;           // 命令状态 (0=成功, 非0=错误码)
     struct edit_command *next;
 } edit_command;
+
+// 定义服务器命令日志节点结构
+typedef struct server_cmd_log {
+    char *command;        // 执行的命令字符串
+    uint64_t version;     // 对应的版本号
+    struct server_cmd_log *next;
+} server_cmd_log;
 
 // 定义文档块结构（链表节点）
 typedef struct chunk {
@@ -59,14 +64,20 @@ typedef struct {
     uint64_t version;      // 当前版本号
     edit_command *pending_edits; // 待处理的编辑命令
     edit_command *edit_history;  // 编辑历史
+    server_cmd_log *cmd_log_head; // 服务器命令日志链表头
 } document;
 
 // 辅助函数声明
 chunk *create_chunk(const char *content, size_t length);
 void free_chunk(chunk *c);
-edit_command *create_command(command_type type, uint64_t version, size_t pos1, size_t pos2, const char *content, int level, const char *username, const char *original_cmd);
+edit_command *create_command(command_type type, uint64_t version, size_t pos1, size_t pos2, const char *content, int level);
 void free_command(edit_command *cmd);
 void add_pending_edit(document *doc, edit_command *cmd);
 void add_edit_history(document *doc, edit_command *cmd);
+
+// 服务器命令日志函数声明
+server_cmd_log *create_server_cmd_log(const char *command, uint64_t version);
+void free_server_cmd_log(server_cmd_log *log);
+void add_server_cmd_log(document *doc, const char *command, uint64_t version);
 
 #endif // DOCUMENT_H

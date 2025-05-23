@@ -18,6 +18,7 @@ void markdown_init(document *doc) {
     doc->version = 0;
     doc->pending_edits = NULL;
     doc->edit_history = NULL;
+    doc->cmd_log_head = NULL;
 }
 
 /**
@@ -58,11 +59,22 @@ void markdown_free(document *doc) {
         cmd = next_cmd;
     }
 
+    // 释放服务器命令日志
+    server_cmd_log *log = doc->cmd_log_head;
+    server_cmd_log *next_log;
+
+    while (log) {
+        next_log = log->next;
+        free_server_cmd_log(log);
+        log = next_log;
+    }
+
     // 重置文档状态
     doc->head = NULL;
     doc->total_length = 0;
     doc->pending_edits = NULL;
     doc->edit_history = NULL;
+    doc->cmd_log_head = NULL;
 }
 
 /**
@@ -239,11 +251,9 @@ static int direct_insert(document *doc, size_t pos, const char *content, size_t 
  * @param version 版本号
  * @param pos 插入位置
  * @param content 要插入的内容
- * @param username 用户名
- * @param original_cmd 原始命令字符串
  * @return 成功返回 SUCCESS，否则返回错误码
  */
-int markdown_insert(document *doc, uint64_t version, size_t pos, const char *content, const char *username, const char *original_cmd) {
+int markdown_insert(document *doc, uint64_t version, size_t pos, const char *content) {
     if (!doc || !content) {
         return INVALID_CURSOR_POS;
     }
@@ -262,13 +272,8 @@ int markdown_insert(document *doc, uint64_t version, size_t pos, const char *con
         return SUCCESS; // 空内容，无需插入
     }
 
-    // 创建编辑命令并添加到待处理列表
-    edit_command *cmd = create_command(CMD_INSERT, version, pos, 0, content, 0, username, original_cmd);
-    if (!cmd) {
-        return INVALID_CURSOR_POS; // 内存分配失败
-    }
-
-    add_pending_edit(doc, cmd);
+    // 不再需要创建编辑命令，直接执行操作
+    // 服务器命令日志将在 process_command 层面管理
 
     // 如果文档为空，直接创建一个新块
     if (!doc->head) {
@@ -360,11 +365,9 @@ int markdown_insert(document *doc, uint64_t version, size_t pos, const char *con
  * @param version 版本号
  * @param pos 删除起始位置
  * @param len 删除长度
- * @param username 用户名
- * @param original_cmd 原始命令字符串
  * @return 成功返回 SUCCESS，否则返回错误码
  */
-int markdown_delete(document *doc, uint64_t version, size_t pos, size_t len, const char *username, const char *original_cmd) {
+int markdown_delete(document *doc, uint64_t version, size_t pos, size_t len) {
     if (!doc) {
         return INVALID_CURSOR_POS;
     }
@@ -382,13 +385,8 @@ int markdown_delete(document *doc, uint64_t version, size_t pos, size_t len, con
         return SUCCESS; // 无需删除
     }
 
-    // 创建编辑命令并添加到待处理列表
-    edit_command *cmd = create_command(CMD_DELETE, version, pos, pos + len, NULL, 0, username, original_cmd);
-    if (!cmd) {
-        return INVALID_CURSOR_POS; // 内存分配失败
-    }
-
-    add_pending_edit(doc, cmd);
+    // 不再需要创建编辑命令，直接执行操作
+    // 服务器命令日志将在 process_command 层面管理
 
     // 查找删除起始位置
     chunk *start_chunk;
@@ -532,11 +530,9 @@ int markdown_delete(document *doc, uint64_t version, size_t pos, size_t len, con
  * @param doc 文档指针
  * @param version 版本号
  * @param pos 插入位置
- * @param username 用户名
- * @param original_cmd 原始命令字符串
  * @return 成功返回 SUCCESS，否则返回错误码
  */
-int markdown_newline(document *doc, uint64_t version, size_t pos, const char *username, const char *original_cmd) {
+int markdown_newline(document *doc, uint64_t version, size_t pos) {
     if (!doc) {
         return INVALID_CURSOR_POS;
     }
@@ -550,13 +546,8 @@ int markdown_newline(document *doc, uint64_t version, size_t pos, const char *us
         return INVALID_CURSOR_POS;
     }
 
-    // 创建编辑命令并添加到待处理列表
-    edit_command *cmd = create_command(CMD_NEWLINE, version, pos, 0, NULL, 0, username, original_cmd);
-    if (!cmd) {
-        return INVALID_CURSOR_POS; // 内存分配失败
-    }
-
-    add_pending_edit(doc, cmd);
+    // 不再需要创建编辑命令，直接执行操作
+    // 服务器命令日志将在 process_command 层面管理
 
     // 执行实际的换行符插入
     return direct_insert(doc, pos, "\n", 1);
@@ -572,7 +563,7 @@ int markdown_newline(document *doc, uint64_t version, size_t pos, const char *us
  * @param original_cmd 原始命令字符串
  * @return 成功返回 SUCCESS，否则返回错误码
  */
-int markdown_heading(document *doc, uint64_t version, int level, size_t pos, const char *username, const char *original_cmd) {
+int markdown_heading(document *doc, uint64_t version, int level, size_t pos) {
     if (!doc) {
         return INVALID_CURSOR_POS;
     }
@@ -602,7 +593,7 @@ int markdown_heading(document *doc, uint64_t version, int level, size_t pos, con
         if (find_position(doc, pos - 1, &prev_chunk, &prev_offset)) {
             if (prev_chunk->content[prev_offset] != '\n') {
                 // 需要先插入换行符
-                int result = markdown_insert(doc, version, pos, "\n", username, original_cmd);
+                int result = markdown_insert(doc, version, pos, "\n");
                 if (result != SUCCESS) {
                     return result;
                 }
@@ -625,7 +616,7 @@ int markdown_heading(document *doc, uint64_t version, int level, size_t pos, con
     }
 
     // 插入标题前缀
-    return markdown_insert(doc, version, pos, prefix, username, original_cmd);
+    return markdown_insert(doc, version, pos, prefix);
 }
 
 /**
@@ -638,7 +629,7 @@ int markdown_heading(document *doc, uint64_t version, int level, size_t pos, con
  * @param original_cmd 原始命令字符串
  * @return 成功返回 SUCCESS，否则返回错误码
  */
-int markdown_bold(document *doc, uint64_t version, size_t start, size_t end, const char *username, const char *original_cmd) {
+int markdown_bold(document *doc, uint64_t version, size_t start, size_t end) {
     if (!doc) {
         return INVALID_CURSOR_POS;
     }
@@ -652,13 +643,8 @@ int markdown_bold(document *doc, uint64_t version, size_t start, size_t end, con
         return INVALID_CURSOR_POS;
     }
 
-    // 创建编辑命令并添加到待处理列表
-    edit_command *cmd = create_command(CMD_BOLD, version, start, end, NULL, 0, username, original_cmd);
-    if (!cmd) {
-        return INVALID_CURSOR_POS; // 内存分配失败
-    }
-
-    add_pending_edit(doc, cmd);
+    // 不再需要创建编辑命令，直接执行操作
+    // 服务器命令日志将在 process_command 层面管理
 
     // 先在结束位置插入 "**"
     int result = direct_insert(doc, end, "**", 2);
@@ -680,7 +666,7 @@ int markdown_bold(document *doc, uint64_t version, size_t start, size_t end, con
  * @param original_cmd 原始命令字符串
  * @return 成功返回 SUCCESS，否则返回错误码
  */
-int markdown_italic(document *doc, uint64_t version, size_t start, size_t end, const char *username, const char *original_cmd) {
+int markdown_italic(document *doc, uint64_t version, size_t start, size_t end) {
     if (!doc) {
         return INVALID_CURSOR_POS;
     }
@@ -694,13 +680,8 @@ int markdown_italic(document *doc, uint64_t version, size_t start, size_t end, c
         return INVALID_CURSOR_POS;
     }
 
-    // 创建编辑命令并添加到待处理列表
-    edit_command *cmd = create_command(CMD_ITALIC, version, start, end, NULL, 0, username, original_cmd);
-    if (!cmd) {
-        return INVALID_CURSOR_POS; // 内存分配失败
-    }
-
-    add_pending_edit(doc, cmd);
+    // 不再需要创建编辑命令，直接执行操作
+    // 服务器命令日志将在 process_command 层面管理
 
     // 先在结束位置插入 "*"
     int result = direct_insert(doc, end, "*", 1);
@@ -721,7 +702,7 @@ int markdown_italic(document *doc, uint64_t version, size_t start, size_t end, c
  * @param original_cmd 原始命令字符串
  * @return 成功返回 SUCCESS，否则返回错误码
  */
-int markdown_blockquote(document *doc, uint64_t version, size_t pos, const char *username, const char *original_cmd) {
+int markdown_blockquote(document *doc, uint64_t version, size_t pos) {
     if (!doc) {
         return INVALID_CURSOR_POS;
     }
@@ -744,7 +725,7 @@ int markdown_blockquote(document *doc, uint64_t version, size_t pos, const char 
         if (find_position(doc, pos - 1, &prev_chunk, &prev_offset)) {
             if (prev_chunk->content[prev_offset] != '\n') {
                 // 需要先插入换行符
-                int result = markdown_insert(doc, version, pos, "\n", username, original_cmd);
+                int result = markdown_insert(doc, version, pos, "\n");
                 if (result != SUCCESS) {
                     return result;
                 }
@@ -754,7 +735,7 @@ int markdown_blockquote(document *doc, uint64_t version, size_t pos, const char 
     }
 
     // 插入引用块前缀
-    return markdown_insert(doc, version, pos, "> ", username, original_cmd);
+    return markdown_insert(doc, version, pos, "> ");
 }
 
 /**
@@ -766,7 +747,7 @@ int markdown_blockquote(document *doc, uint64_t version, size_t pos, const char 
  * @param original_cmd 原始命令字符串
  * @return 成功返回 SUCCESS，否则返回错误码
  */
-int markdown_ordered_list(document *doc, uint64_t version, size_t pos, const char *username, const char *original_cmd) {
+int markdown_ordered_list(document *doc, uint64_t version, size_t pos) {
     if (!doc) {
         return INVALID_CURSOR_POS;
     }
@@ -789,7 +770,7 @@ int markdown_ordered_list(document *doc, uint64_t version, size_t pos, const cha
         if (find_position(doc, pos - 1, &prev_chunk, &prev_offset)) {
             if (prev_chunk->content[prev_offset] != '\n') {
                 // 需要先插入换行符
-                int result = markdown_insert(doc, version, pos, "\n", username, original_cmd);
+                int result = markdown_insert(doc, version, pos, "\n");
                 if (result != SUCCESS) {
                     return result;
                 }
@@ -840,7 +821,7 @@ int markdown_ordered_list(document *doc, uint64_t version, size_t pos, const cha
     snprintf(prefix, sizeof(prefix), "%d. ", number);
 
     // 插入列表项前缀
-    return markdown_insert(doc, version, pos, prefix, username, original_cmd);
+    return markdown_insert(doc, version, pos, prefix);
 }
 
 /**
@@ -852,7 +833,7 @@ int markdown_ordered_list(document *doc, uint64_t version, size_t pos, const cha
  * @param original_cmd 原始命令字符串
  * @return 成功返回 SUCCESS，否则返回错误码
  */
-int markdown_unordered_list(document *doc, uint64_t version, size_t pos, const char *username, const char *original_cmd) {
+int markdown_unordered_list(document *doc, uint64_t version, size_t pos) {
     if (!doc) {
         return INVALID_CURSOR_POS;
     }
@@ -875,7 +856,7 @@ int markdown_unordered_list(document *doc, uint64_t version, size_t pos, const c
         if (find_position(doc, pos - 1, &prev_chunk, &prev_offset)) {
             if (prev_chunk->content[prev_offset] != '\n') {
                 // 需要先插入换行符
-                int result = markdown_insert(doc, version, pos, "\n", username, original_cmd);
+                int result = markdown_insert(doc, version, pos, "\n");
                 if (result != SUCCESS) {
                     return result;
                 }
@@ -885,7 +866,7 @@ int markdown_unordered_list(document *doc, uint64_t version, size_t pos, const c
     }
 
     // 插入无序列表前缀
-    return markdown_insert(doc, version, pos, "- ", username, original_cmd);
+    return markdown_insert(doc, version, pos, "- ");
 }
 
 /**
@@ -898,7 +879,7 @@ int markdown_unordered_list(document *doc, uint64_t version, size_t pos, const c
  * @param original_cmd 原始命令字符串
  * @return 成功返回 SUCCESS，否则返回错误码
  */
-int markdown_code(document *doc, uint64_t version, size_t start, size_t end, const char *username, const char *original_cmd) {
+int markdown_code(document *doc, uint64_t version, size_t start, size_t end) {
     if (!doc) {
         return INVALID_CURSOR_POS;
     }
@@ -913,7 +894,7 @@ int markdown_code(document *doc, uint64_t version, size_t start, size_t end, con
     }
 
     // 创建编辑命令并添加到待处理列表
-    edit_command *cmd = create_command(CMD_CODE, version, start, end, NULL, 0, username, original_cmd);
+    edit_command *cmd = create_command(CMD_CODE, version, start, end, NULL, 0);
     if (!cmd) {
         return INVALID_CURSOR_POS; // 内存分配失败
     }
@@ -939,7 +920,7 @@ int markdown_code(document *doc, uint64_t version, size_t start, size_t end, con
  * @param original_cmd 原始命令字符串
  * @return 成功返回 SUCCESS，否则返回错误码
  */
-int markdown_horizontal_rule(document *doc, uint64_t version, size_t pos, const char *username, const char *original_cmd) {
+int markdown_horizontal_rule(document *doc, uint64_t version, size_t pos) {
     if (!doc) {
         return INVALID_CURSOR_POS;
     }
@@ -962,7 +943,7 @@ int markdown_horizontal_rule(document *doc, uint64_t version, size_t pos, const 
         if (find_position(doc, pos - 1, &prev_chunk, &prev_offset)) {
             if (prev_chunk->content[prev_offset] != '\n') {
                 // 需要先插入换行符
-                int result = markdown_insert(doc, version, pos, "\n", username, original_cmd);
+                int result = markdown_insert(doc, version, pos, "\n");
                 if (result != SUCCESS) {
                     return result;
                 }
@@ -972,7 +953,7 @@ int markdown_horizontal_rule(document *doc, uint64_t version, size_t pos, const 
     }
 
     // 插入水平线并确保后面有换行符
-    int result = markdown_insert(doc, version, pos, "---", username, original_cmd);
+    int result = markdown_insert(doc, version, pos, "---");
     if (result != SUCCESS) {
         return result;
     }
@@ -985,12 +966,12 @@ int markdown_horizontal_rule(document *doc, uint64_t version, size_t pos, const 
         if (find_position(doc, pos + 3, &next_chunk, &next_offset)) {
             if (next_chunk->content[next_offset] != '\n') {
                 // 需要在水平线后插入换行符
-                return markdown_insert(doc, version, pos + 3, "\n", username, original_cmd);
+                return markdown_insert(doc, version, pos + 3, "\n");
             }
         }
     } else {
         // 水平线在文档末尾，添加换行符
-        return markdown_insert(doc, version, pos + 3, "\n", username, original_cmd);
+        return markdown_insert(doc, version, pos + 3, "\n");
     }
 
     return SUCCESS;
@@ -1007,7 +988,7 @@ int markdown_horizontal_rule(document *doc, uint64_t version, size_t pos, const 
  * @param original_cmd 原始命令字符串
  * @return 成功返回 SUCCESS，否则返回错误码
  */
-int markdown_link(document *doc, uint64_t version, size_t start, size_t end, const char *url, const char *username, const char *original_cmd) {
+int markdown_link(document *doc, uint64_t version, size_t start, size_t end, const char *url) {
     if (!doc || !url) {
         return INVALID_CURSOR_POS;
     }
@@ -1022,7 +1003,7 @@ int markdown_link(document *doc, uint64_t version, size_t start, size_t end, con
     }
 
     // 创建编辑命令并添加到待处理列表
-    edit_command *cmd = create_command(CMD_LINK, version, start, end, url, 0, username, original_cmd);
+    edit_command *cmd = create_command(CMD_LINK, version, start, end, url, 0);
     if (!cmd) {
         return INVALID_CURSOR_POS; // 内存分配失败
     }

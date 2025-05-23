@@ -229,7 +229,7 @@ int main(int argc, char *argv[]) {
         content[doc_length] = '\0';
 
         // 将内容插入到文档中
-        markdown_insert(&doc, doc.version, 0, content, "client", "INSERT 0 content");
+        markdown_insert(&doc, doc.version, 0, content);
         free(content);
     }
 
@@ -504,53 +504,53 @@ void process_server_update(const char *update) {
                                 if (strlen(content_start) > 0) {
                                     strncpy(content, content_start, MAX_COMMAND_LEN - 1);
                                     content[MAX_COMMAND_LEN - 1] = '\0';
-                                    markdown_insert(&doc, doc.version, pos1, content, edit_username, cmd_part);
+                                    markdown_insert(&doc, doc.version, pos1, content);
                                 }
                             }
                         } else if (strcmp(cmd_type, "DEL") == 0) {
                             // DEL <pos> <no_char>
                             if (sscanf(args, "%zu %zu", &pos1, &pos2) >= 2) {
-                                markdown_delete(&doc, doc.version, pos1, pos2, edit_username, cmd_part);
+                                markdown_delete(&doc, doc.version, pos1, pos2);
                             }
                         } else if (strcmp(cmd_type, "HEADING") == 0) {
                             // HEADING <level> <pos>
                             if (sscanf(args, "%d %zu", &level, &pos1) >= 2) {
-                                markdown_heading(&doc, doc.version, level, pos1, edit_username, cmd_part);
+                                markdown_heading(&doc, doc.version, level, pos1);
                             }
                         } else if (strcmp(cmd_type, "BOLD") == 0) {
                             // BOLD <pos_start> <pos_end>
                             if (sscanf(args, "%zu %zu", &pos1, &pos2) >= 2) {
-                                markdown_bold(&doc, doc.version, pos1, pos2, edit_username, cmd_part);
+                                markdown_bold(&doc, doc.version, pos1, pos2);
                             }
                         } else if (strcmp(cmd_type, "ITALIC") == 0) {
                             // ITALIC <pos_start> <pos_end>
                             if (sscanf(args, "%zu %zu", &pos1, &pos2) >= 2) {
-                                markdown_italic(&doc, doc.version, pos1, pos2, edit_username, cmd_part);
+                                markdown_italic(&doc, doc.version, pos1, pos2);
                             }
                         } else if (strcmp(cmd_type, "BLOCKQUOTE") == 0) {
                             // BLOCKQUOTE <pos>
                             if (sscanf(args, "%zu", &pos1) >= 1) {
-                                markdown_blockquote(&doc, doc.version, pos1, edit_username, cmd_part);
+                                markdown_blockquote(&doc, doc.version, pos1);
                             }
                         } else if (strcmp(cmd_type, "ORDERED_LIST") == 0) {
                             // ORDERED_LIST <pos>
                             if (sscanf(args, "%zu", &pos1) >= 1) {
-                                markdown_ordered_list(&doc, doc.version, pos1, edit_username, cmd_part);
+                                markdown_ordered_list(&doc, doc.version, pos1);
                             }
                         } else if (strcmp(cmd_type, "UNORDERED_LIST") == 0) {
                             // UNORDERED_LIST <pos>
                             if (sscanf(args, "%zu", &pos1) >= 1) {
-                                markdown_unordered_list(&doc, doc.version, pos1, edit_username, cmd_part);
+                                markdown_unordered_list(&doc, doc.version, pos1);
                             }
                         } else if (strcmp(cmd_type, "CODE") == 0) {
                             // CODE <pos_start> <pos_end>
                             if (sscanf(args, "%zu %zu", &pos1, &pos2) >= 2) {
-                                markdown_code(&doc, doc.version, pos1, pos2, edit_username, cmd_part);
+                                markdown_code(&doc, doc.version, pos1, pos2);
                             }
                         } else if (strcmp(cmd_type, "HORIZONTAL_RULE") == 0) {
                             // HORIZONTAL_RULE <pos>
                             if (sscanf(args, "%zu", &pos1) >= 1) {
-                                markdown_horizontal_rule(&doc, doc.version, pos1, edit_username, cmd_part);
+                                markdown_horizontal_rule(&doc, doc.version, pos1);
                             }
                         } else if (strcmp(cmd_type, "LINK") == 0) {
                             // LINK <pos_start> <pos_end> <link>
@@ -567,14 +567,14 @@ void process_server_update(const char *update) {
                                     if (strlen(link_start) > 0) {
                                         strncpy(content, link_start, MAX_COMMAND_LEN - 1);
                                         content[MAX_COMMAND_LEN - 1] = '\0';
-                                        markdown_link(&doc, doc.version, pos1, pos2, content, edit_username, cmd_part);
+                                        markdown_link(&doc, doc.version, pos1, pos2, content);
                                     }
                                 }
                             }
                         } else if (strcmp(cmd_type, "NEWLINE") == 0) {
                             // NEWLINE <pos>
                             if (sscanf(args, "%zu", &pos1) >= 1) {
-                                markdown_newline(&doc, doc.version, pos1, edit_username, cmd_part);
+                                markdown_newline(&doc, doc.version, pos1);
                             }
                         }
                     }
@@ -638,7 +638,7 @@ void sync_full_document(const char *content) {
                 }
 
                 if (strlen(clean_content) > 0) {
-                    markdown_insert(&doc, doc.version, 0, clean_content, "server", "FULL_SYNC");
+                    markdown_insert(&doc, doc.version, 0, clean_content);
                 }
                 free(clean_content);
             }
