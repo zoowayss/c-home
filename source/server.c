@@ -428,7 +428,6 @@ void *client_handler(void *arg) {
 
         command[bytes_read] = '\0';
 
-        printf("Received command: %s\n", command);
         // 处理命令
         if (strncmp(command, "DISCONNECT", 10) == 0) {
             break;
@@ -660,7 +659,6 @@ void process_command(const char *username, const char *command) {
 
     // 检查版本号是否匹配
     pthread_mutex_lock(&doc_mutex);
-    printf("cmd_version: %lu, doc.version: %lu\n", cmd_version, doc.version);
     if (cmd_version != doc.version) {
         // 版本不匹配，创建一个状态为 OUTDATED_VERSION 的命令
         edit_command *cmd = create_command(CMD_INSERT, cmd_version, 0, 0, NULL, 0, username, command);
@@ -784,7 +782,6 @@ void broadcast_update(int version_changed) {
     // 广播给所有客户端
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (clients[i].connected && clients[i].s2c_fd != -1) {
-            printf("Broadcasting message:%s\n", message);
             ssize_t bytes_written = write(clients[i].s2c_fd, message, message_len);
             if (bytes_written <= 0) {
                 // 写入失败，可能客户端已断开
