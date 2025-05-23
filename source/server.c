@@ -59,7 +59,7 @@ typedef struct {
 } command_log;
 
 // 全局变量
-static document doc;
+static document *doc;
 static client_info clients[MAX_CLIENTS];
 static int client_count = 0;
 static pthread_mutex_t client_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -163,7 +163,11 @@ int main(int argc, char *argv[]) {
     }
 
     // 初始化文档
-    markdown_init(&doc);
+    doc = markdown_init();
+    if (!doc) {
+        fprintf(stderr, "Error: Failed to initialize document\n");
+        return 1;
+    }
 
     // 初始化客户端数组
     for (int i = 0; i < MAX_CLIENTS; i++) {
@@ -355,12 +359,12 @@ void *client_handler(void *arg) {
 
         // 发送文档版本号
         char version_str[32];
-        snprintf(version_str, sizeof(version_str), "%lu\n", doc.version);
+        snprintf(version_str, sizeof(version_str), "%lu\n", doc->version);
         write(s2c_fd, version_str, strlen(version_str));
 
         // 发送文档内容
         pthread_mutex_lock(&doc_mutex);
-        char *content = markdown_flatten(&doc);
+        char *content = markdown_flatten(doc);
         pthread_mutex_unlock(&doc_mutex);
 
         if (content) {
@@ -435,8 +439,8 @@ void *client_handler(void *arg) {
         } else if (strncmp(command, "DOC?", 4) == 0) {
             // 发送文档内容和版本号
             pthread_mutex_lock(&doc_mutex);
-            char *content = markdown_flatten(&doc);
-            uint64_t current_version = doc.version;
+            char *content = markdown_flatten(doc);
+            uint64_t current_version = doc->version;
             pthread_mutex_unlock(&doc_mutex);
 
             // 先发送版本号
@@ -576,7 +580,7 @@ void *update_thread(void *arg) {
                 broadcast_update(version_changed);
 
                 // 增加文档版本号
-                markdown_increment_version(&doc);
+                markdown_increment_version(doc);
 
                 // 继续下一次循环
                 continue;
@@ -660,7 +664,7 @@ void process_command(const char *username, const char *command) {
 
     // 获取当前文档版本号用于执行命令
     pthread_mutex_lock(&doc_mutex);
-    uint64_t current_version = doc.version;
+    uint64_t current_version = doc->version;
     pthread_mutex_unlock(&doc_mutex);
 
     // 执行命令
@@ -682,7 +686,7 @@ void process_command(const char *username, const char *command) {
         edit_command *cmd = create_command(CMD_INSERT, current_version, 0, 0, NULL, 0);
         if (cmd) {
             cmd->status = UNAUTHORIZED;
-            add_pending_edit(&doc, cmd);
+            add_pending_edit(doc, cmd);
         }
         return;
     }
@@ -694,35 +698,35 @@ void process_command(const char *username, const char *command) {
     int result = SUCCESS;
 
     if (strcmp(cmd_type, "INSERT") == 0) {
-        result = markdown_insert(&doc, current_version, pos1, content);
+        result = markdown_insert(doc, current_version, pos1, content);
     } else if (strcmp(cmd_type, "DEL") == 0) {
-        result = markdown_delete(&doc, current_version, pos1, pos2);
+        result = markdown_delete(doc, current_version, pos1, pos2);
     } else if (strcmp(cmd_type, "HEADING") == 0) {
-        result = markdown_heading(&doc, current_version, level, pos1);
+        result = markdown_heading(doc, current_version, level, pos1);
     } else if (strcmp(cmd_type, "BOLD") == 0) {
-        result = markdown_bold(&doc, current_version, pos1, pos2);
+        result = markdown_bold(doc, current_version, pos1, pos2);
     } else if (strcmp(cmd_type, "ITALIC") == 0) {
-        result = markdown_italic(&doc, current_version, pos1, pos2);
+        result = markdown_italic(doc, current_version, pos1, pos2);
     } else if (strcmp(cmd_type, "BLOCKQUOTE") == 0) {
-        result = markdown_blockquote(&doc, current_version, pos1);
+        result = markdown_blockquote(doc, current_version, pos1);
     } else if (strcmp(cmd_type, "ORDERED_LIST") == 0) {
-        result = markdown_ordered_list(&doc, current_version, pos1);
+        result = markdown_ordered_list(doc, current_version, pos1);
     } else if (strcmp(cmd_type, "UNORDERED_LIST") == 0) {
-        result = markdown_unordered_list(&doc, current_version, pos1);
+        result = markdown_unordered_list(doc, current_version, pos1);
     } else if (strcmp(cmd_type, "CODE") == 0) {
-        result = markdown_code(&doc, current_version, pos1, pos2);
+        result = markdown_code(doc, current_version, pos1, pos2);
     } else if (strcmp(cmd_type, "HORIZONTAL_RULE") == 0) {
-        result = markdown_horizontal_rule(&doc, current_version, pos1);
+        result = markdown_horizontal_rule(doc, current_version, pos1);
     } else if (strcmp(cmd_type, "LINK") == 0) {
-        result = markdown_link(&doc, current_version, pos1, pos2, content);
+        result = markdown_link(doc, current_version, pos1, pos2, content);
     } else if (strcmp(cmd_type, "NEWLINE") == 0) {
-        result = markdown_newline(&doc, current_version, pos1);
+        result = markdown_newline(doc, current_version, pos1);
     }
 
     // 根据执行结果处理
     if (result == SUCCESS) {
         // 成功执行，添加到服务器命令日志
-        add_server_cmd_log(&doc, full_command, current_version);
+        add_server_cmd_log(doc, full_command, current_version);
     } else {
         // 执行失败，也添加到服务器命令日志，但标记为错误
         char error_command[MAX_COMMAND_LEN * 2 + 50];
@@ -742,7 +746,7 @@ void process_command(const char *username, const char *command) {
                 break;
         }
         snprintf(error_command, sizeof(error_command), "%s ERROR:%s", full_command, error_reason);
-        add_server_cmd_log(&doc, error_command, current_version);
+        add_server_cmd_log(doc, error_command, current_version);
     }
 
     // 不再需要单独记录日志，因为我们现在使用 pending_edits
@@ -763,15 +767,15 @@ void broadcast_update(int version_changed) {
     }
 
     // 版本号
-    fprintf(message_stream, "VERSION %lu\n", doc.version);
+    fprintf(message_stream, "VERSION %lu\n", doc->version);
 
     // 使用服务器命令日志构造广播消息
     pthread_mutex_lock(&doc_mutex);
-    server_cmd_log *log_entry = doc.cmd_log_head;
+    server_cmd_log *log_entry = doc->cmd_log_head;
 
     while (log_entry) {
         // 只处理当前版本的命令
-        if (log_entry->version == doc.version) {
+        if (log_entry->version == doc->version) {
             // 去除命令字符串末尾的换行符
             char clean_command[MAX_COMMAND_LEN * 2];
             strncpy(clean_command, log_entry->command, sizeof(clean_command) - 1);
@@ -844,7 +848,7 @@ void save_document() {
 
     FILE *doc_file = fopen("doc.md", "w");
     if (doc_file) {
-        markdown_print(&doc, doc_file);
+        markdown_print(doc, doc_file);
         fclose(doc_file);
     }
 
@@ -914,7 +918,7 @@ void cleanup_resources() {
 
     // 释放文档资源
     pthread_mutex_lock(&doc_mutex);
-    markdown_free(&doc);
+    markdown_free(doc);
     pthread_mutex_unlock(&doc_mutex);
 
     // 销毁互斥锁

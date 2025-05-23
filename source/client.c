@@ -27,7 +27,7 @@ static pid_t client_pid;
 static char username[64];
 static int c2s_fd = -1; // 客户端到服务器的管道
 static int s2c_fd = -1; // 服务器到客户端的管道
-static document doc; // 本地文档副本
+static document *doc; // 本地文档副本
 static uint64_t document_version; // 文档版本号
 static int is_write_permission = 0;
 static int client_running = 1;
@@ -210,7 +210,11 @@ int main(int argc, char *argv[]) {
     size_t doc_length = strtoull(length_str, NULL, 10);
 
     // 初始化文档
-    markdown_init(&doc);
+    doc = markdown_init();
+    if (!doc) {
+        cleanup_resources();
+        return 1;
+    }
 
     // 读取文档内容
     if (doc_length > 0) {
@@ -229,7 +233,7 @@ int main(int argc, char *argv[]) {
         content[doc_length] = '\0';
 
         // 将内容插入到文档中
-        markdown_insert(&doc, doc.version, 0, content);
+        markdown_insert(doc, doc->version, 0, content);
         free(content);
     }
 
@@ -442,7 +446,7 @@ void process_server_update(const char *update) {
         sscanf(update, "VERSION %lu", &broadcast_version);
 
         // 检查本地文档版本是否与广播版本一致
-        if (broadcast_version != doc.version) {
+        if (broadcast_version != doc->version) {
             // 版本不一致，可能错过了更新，请求完整文档
             write(c2s_fd, "DOC?", 4);
         }
@@ -504,53 +508,53 @@ void process_server_update(const char *update) {
                                 if (strlen(content_start) > 0) {
                                     strncpy(content, content_start, MAX_COMMAND_LEN - 1);
                                     content[MAX_COMMAND_LEN - 1] = '\0';
-                                    markdown_insert(&doc, doc.version, pos1, content);
+                                    markdown_insert(doc, doc->version, pos1, content);
                                 }
                             }
                         } else if (strcmp(cmd_type, "DEL") == 0) {
                             // DEL <pos> <no_char>
                             if (sscanf(args, "%zu %zu", &pos1, &pos2) >= 2) {
-                                markdown_delete(&doc, doc.version, pos1, pos2);
+                                markdown_delete(doc, doc->version, pos1, pos2);
                             }
                         } else if (strcmp(cmd_type, "HEADING") == 0) {
                             // HEADING <level> <pos>
                             if (sscanf(args, "%d %zu", &level, &pos1) >= 2) {
-                                markdown_heading(&doc, doc.version, level, pos1);
+                                markdown_heading(doc, doc->version, level, pos1);
                             }
                         } else if (strcmp(cmd_type, "BOLD") == 0) {
                             // BOLD <pos_start> <pos_end>
                             if (sscanf(args, "%zu %zu", &pos1, &pos2) >= 2) {
-                                markdown_bold(&doc, doc.version, pos1, pos2);
+                                markdown_bold(doc, doc->version, pos1, pos2);
                             }
                         } else if (strcmp(cmd_type, "ITALIC") == 0) {
                             // ITALIC <pos_start> <pos_end>
                             if (sscanf(args, "%zu %zu", &pos1, &pos2) >= 2) {
-                                markdown_italic(&doc, doc.version, pos1, pos2);
+                                markdown_italic(doc, doc->version, pos1, pos2);
                             }
                         } else if (strcmp(cmd_type, "BLOCKQUOTE") == 0) {
                             // BLOCKQUOTE <pos>
                             if (sscanf(args, "%zu", &pos1) >= 1) {
-                                markdown_blockquote(&doc, doc.version, pos1);
+                                markdown_blockquote(doc, doc->version, pos1);
                             }
                         } else if (strcmp(cmd_type, "ORDERED_LIST") == 0) {
                             // ORDERED_LIST <pos>
                             if (sscanf(args, "%zu", &pos1) >= 1) {
-                                markdown_ordered_list(&doc, doc.version, pos1);
+                                markdown_ordered_list(doc, doc->version, pos1);
                             }
                         } else if (strcmp(cmd_type, "UNORDERED_LIST") == 0) {
                             // UNORDERED_LIST <pos>
                             if (sscanf(args, "%zu", &pos1) >= 1) {
-                                markdown_unordered_list(&doc, doc.version, pos1);
+                                markdown_unordered_list(doc, doc->version, pos1);
                             }
                         } else if (strcmp(cmd_type, "CODE") == 0) {
                             // CODE <pos_start> <pos_end>
                             if (sscanf(args, "%zu %zu", &pos1, &pos2) >= 2) {
-                                markdown_code(&doc, doc.version, pos1, pos2);
+                                markdown_code(doc, doc->version, pos1, pos2);
                             }
                         } else if (strcmp(cmd_type, "HORIZONTAL_RULE") == 0) {
                             // HORIZONTAL_RULE <pos>
                             if (sscanf(args, "%zu", &pos1) >= 1) {
-                                markdown_horizontal_rule(&doc, doc.version, pos1);
+                                markdown_horizontal_rule(doc, doc->version, pos1);
                             }
                         } else if (strcmp(cmd_type, "LINK") == 0) {
                             // LINK <pos_start> <pos_end> <link>
@@ -567,14 +571,14 @@ void process_server_update(const char *update) {
                                     if (strlen(link_start) > 0) {
                                         strncpy(content, link_start, MAX_COMMAND_LEN - 1);
                                         content[MAX_COMMAND_LEN - 1] = '\0';
-                                        markdown_link(&doc, doc.version, pos1, pos2, content);
+                                        markdown_link(doc, doc->version, pos1, pos2, content);
                                     }
                                 }
                             }
                         } else if (strcmp(cmd_type, "NEWLINE") == 0) {
                             // NEWLINE <pos>
                             if (sscanf(args, "%zu", &pos1) >= 1) {
-                                markdown_newline(&doc, doc.version, pos1);
+                                markdown_newline(doc, doc->version, pos1);
                             }
                         }
                     }
@@ -588,8 +592,8 @@ void process_server_update(const char *update) {
         }
     } else if (strncmp(update, "END", 3) == 0) {
         // 更新结束，将本地文档版本+1，与服务器保持同步
-        markdown_increment_version(&doc);
-        document_version = doc.version;
+        markdown_increment_version(doc);
+        document_version = doc->version;
     } else {
         // 检查是否是版本号（纯数字）
         char *endptr;
@@ -617,10 +621,13 @@ void sync_full_document(const char *content) {
     }
 
     // 释放当前文档内容
-    markdown_free(&doc);
+    markdown_free(doc);
 
     // 重新初始化文档
-    markdown_init(&doc);
+    doc = markdown_init();
+    if (!doc) {
+        return;
+    }
 
     // 处理文档内容
     size_t content_len = strlen(content);
@@ -638,7 +645,7 @@ void sync_full_document(const char *content) {
                 }
 
                 if (strlen(clean_content) > 0) {
-                    markdown_insert(&doc, doc.version, 0, clean_content);
+                    markdown_insert(doc, doc->version, 0, clean_content);
                 }
                 free(clean_content);
             }
@@ -647,7 +654,7 @@ void sync_full_document(const char *content) {
     }
 
     // 更新本地版本号为服务器版本
-    doc.version = document_version;
+    doc->version = document_version;
 }
 
 /**
@@ -665,7 +672,10 @@ void cleanup_resources() {
     }
 
     // 释放文档资源
-    markdown_free(&doc);
+    if (doc) {
+        markdown_free(doc);
+        doc = NULL;
+    }
 
     // 释放日志资源
     if (log.log_entries) {
@@ -685,7 +695,7 @@ void cleanup_resources() {
  * 打印文档内容
  */
 void print_document() {
-    markdown_print(&doc, stdout);
+    markdown_print(doc, stdout);
     printf("\n");
 }
 

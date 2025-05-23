@@ -6,11 +6,12 @@
 
 /**
  * 初始化文档
- * @param doc 文档指针
+ * @return 新分配的文档指针，失败时返回 NULL
  */
-void markdown_init(document *doc) {
+document *markdown_init() {
+    document *doc = (document *)malloc(sizeof(document));
     if (!doc) {
-        return;
+        return NULL;
     }
 
     doc->head = NULL;
@@ -19,6 +20,8 @@ void markdown_init(document *doc) {
     doc->pending_edits = NULL;
     doc->edit_history = NULL;
     doc->cmd_log_head = NULL;
+
+    return doc;
 }
 
 /**
@@ -69,12 +72,8 @@ void markdown_free(document *doc) {
         log = next_log;
     }
 
-    // 重置文档状态
-    doc->head = NULL;
-    doc->total_length = 0;
-    doc->pending_edits = NULL;
-    doc->edit_history = NULL;
-    doc->cmd_log_head = NULL;
+    // 释放文档结构本身
+    free(doc);
 }
 
 /**
@@ -1017,7 +1016,7 @@ int markdown_link(document *doc, uint64_t version, size_t start, size_t end, con
         return INVALID_CURSOR_POS; // 内存分配失败
     }
 
-    sprintf(suffix, "](%s)", url);
+    snprintf(suffix, strlen(url) + 4, "](%s)", url);
     int result = direct_insert(doc, end, suffix, strlen(suffix));
     free(suffix);
 

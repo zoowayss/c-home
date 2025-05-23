@@ -11,7 +11,7 @@
  */
 
 // Initialize and free a document
-void markdown_init(document *doc);
+document *markdown_init();
 void markdown_free(document *doc);
 
 // === Edit Commands ===
