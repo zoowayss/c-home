@@ -735,9 +735,16 @@ void broadcast_update(int version_changed) {
     // 使用 pending_edits 构造广播消息
     pthread_mutex_lock(&doc_mutex);
     edit_command *cmd = doc.pending_edits;
+    // original_cmd 去除换行
+    char original_cmd[MAX_COMMAND_LEN];
+    strncpy(original_cmd, cmd->original_cmd, MAX_COMMAND_LEN - 1);
+    original_cmd[MAX_COMMAND_LEN - 1] = '\0';
+    if (original_cmd[strlen(original_cmd) - 1] == '\n') {
+        original_cmd[strlen(original_cmd) - 1] = '\0';
+    }
     while (cmd) {
         // 构造EDIT行：EDIT <username> <command>
-        fprintf(message_stream, "EDIT %s %s", cmd->username, cmd->original_cmd);
+        fprintf(message_stream, "EDIT %s %s", cmd->username, original_cmd);
 
         // 根据命令状态构造状态行
         if (cmd->status == SUCCESS) {
