@@ -83,7 +83,9 @@ static int is_valid_position(const document *doc, size_t pos) {
  * @return 1 如果有效，0 如果无效
  */
 static int is_valid_range(const document *doc, size_t start, size_t end) {
-    return start < end && start < doc->total_length && end <= doc->total_length;
+    // 允许 start 等于 doc->total_length（空选择在文档末尾）
+    // 但通常 start 应该小于 end，且 end 不能超过文档长度
+    return start < end && start <= doc->total_length && end <= doc->total_length;
 }
 
 /**
@@ -217,7 +219,7 @@ static int direct_insert(document *doc, size_t pos, const char *content, size_t 
             prev->next = new_chunk;
         }
     }
-    // 在块末尾插入
+    // 在块末尾插入 (offset == target_chunk->length)
     else {
         chunk *new_chunk = create_chunk(content, content_len);
         if (!new_chunk) {
