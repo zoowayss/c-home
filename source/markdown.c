@@ -182,6 +182,7 @@ static int direct_insert(document *doc, size_t pos, const char *content, size_t 
             return INVALID_CURSOR_POS;
         }
 
+        new_chunk3->next = target_chunk->next;  // 保持原来的链接
         new_chunk2->next = new_chunk3;
         new_chunk1->next = new_chunk2;
 
@@ -302,6 +303,7 @@ int markdown_insert(document *doc, uint64_t version, size_t pos, const char *con
         }
 
         // 更新链表
+        new_chunk3->next = target_chunk->next;  // 保持原来的链接
         new_chunk2->next = new_chunk3;
         new_chunk1->next = new_chunk2;
 
